@@ -11,12 +11,13 @@ const status=t=>$('#status').textContent=t||'';
 
 const FALLBACKS=['gemini-flash-latest','gemini-3.6-flash','gemini-2.5-flash'];
 let noSearch=false;
+function contactsCtx(){try{const c=JSON.parse(localStorage.getItem('otocue_contacts')||'[]');if(!c.length)return '';return ' The user shared these contacts: '+c.map(x=>`${x.name}: ${x.tel||''} ${x.email||''}`).join('; ')+'. If the user asks to call or text one of them, include exactly [CALL:number] or [TEXT:number] in your reply.'}catch(_){return ''}}
 function timeCtx(){const d=new Date(),tz=Intl.DateTimeFormat().resolvedOptions().timeZone;return ` The current date and time for the user is ${d.toLocaleString('en-US',{timeZone:tz,dateStyle:'full',timeStyle:'long'})} (time zone ${tz}); exact UTC time ${d.toISOString()}. Use this for any question about the current time or date anywhere, converting time zones yourself. Use Google Search for anything current (weather, news, scores, prices, hours).`}
 function buildRequest(parts,system,model){
  const key=S.key; if(!key) throw new Error('Add your free Gemini API key in Settings first.');
  return {url:`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model||S.model)}:generateContent`,
   init:{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},
-  body:JSON.stringify(Object.assign({systemInstruction:{parts:[{text:system+timeCtx()}]},contents:[{role:'user',parts}]},noSearch?{}:{tools:[{google_search:{}}]}))}};
+  body:JSON.stringify(Object.assign({systemInstruction:{parts:[{text:system+timeCtx()+contactsCtx()}]},contents:[{role:'user',parts}]},noSearch?{}:{tools:[{google_search:{}}]}))}};
 }
 async function gemini(parts,system=SYS,model){
  const {url,init}=buildRequest(parts,system,model);
@@ -114,3 +115,10 @@ if(localStorage.getItem('otocue_wake')){$('#wake').checked=true;wakeOn=true;}
 document.addEventListener('visibilitychange',()=>{document.hidden?pauseWake():startWake()});
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 window.OtoCue={buildRequest,gemini,doAsk};
+
+$('#contactsBtn').onclick=async()=>{
+ if(!('contacts' in navigator&&'select' in navigator.contacts)){status('Contacts sharing works in Chrome on Android. iPhone web apps can\'t access contacts.');return}
+ try{const r=await navigator.contacts.select(['name','tel','email'],{multiple:true});
+  const c=r.map(x=>({name:(x.name||[])[0]||'',tel:(x.tel||[])[0]||'',email:(x.email||[])[0]||''}));
+  localStorage.setItem('otocue_contacts',JSON.stringify(c));status(`Shared ${c.length} contact(s) with OtoCue.`)}catch(e){status('Contacts: '+e.message)}};
+(function(){const o=$('#out');if(!o)return;new MutationObserver(()=>{const t=o.textContent,m=t.match(/\[(CALL|TEXT):([^\]]+)\]/);if(m){o.textContent=t.replace(m[0],'');location.href=(m[1]==='CALL'?'tel:':'sms:')+m[2].replace(/[^+\d]/g,'')}}).observe(o,{childList:true,characterData:true,subtree:true})})();
