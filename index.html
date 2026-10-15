@@ -1,45 +1,50 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>OtoCue</title><meta name="theme-color" content="#0b0f17"><link rel="manifest" href="manifest.json"><link rel="icon" href="icon.svg"><link rel="apple-touch-icon" href="icon-192.png"><meta name="apple-mobile-web-app-capable" content="yes">
-<style>
-:root{--bg:#0b0f17;--card:#141a26;--tx:#e6edf7;--mu:#8a96ab;--a:#22d3ee;--b:#8b5cf6}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 50% 0,#16213a,var(--bg) 60%);color:var(--tx);font:16px system-ui,-apple-system,sans-serif;min-height:100vh;padding:env(safe-area-inset-top) 16px 90px}
-header{display:flex;justify-content:space-between;align-items:center;padding:14px 0}h1{font-size:22px;margin:0;letter-spacing:.5px}h1 span{background:linear-gradient(90deg,var(--a),var(--b));-webkit-background-clip:text;color:transparent}
-.ib{background:var(--card);border:1px solid #243046;color:var(--tx);border-radius:12px;padding:8px 12px;font-size:15px}
-.tabs{display:flex;gap:6px;overflow-x:auto;margin:6px 0 14px}.tabs button{flex:1;background:var(--card);border:1px solid #243046;color:var(--mu);border-radius:999px;padding:9px 10px;white-space:nowrap}.tabs button.on{color:#000;background:linear-gradient(90deg,var(--a),var(--b));border:0;font-weight:600}
-.panel{display:none}.panel.on{display:block}
-#ask{display:block;margin:20px auto;width:210px;height:210px;border-radius:50%;border:0;color:#fff;font-size:30px;font-weight:700;background:radial-gradient(circle at 35% 30%,#3b4b6e,#111827);box-shadow:0 0 0 8px #1a2338,0 0 50px #22d3ee44;transition:.2s}
-#ask.rec{box-shadow:0 0 0 8px #22d3ee55,0 0 80px #22d3eeaa;animation:p 1.2s infinite}@keyframes p{50%{transform:scale(1.04)}}
-.hint{text-align:center;color:var(--mu);font-size:13px}.row{display:flex;gap:8px;margin:10px 0}.row>*{flex:1}
-.btn{background:linear-gradient(90deg,var(--a),var(--b));border:0;color:#000;font-weight:600;border-radius:14px;padding:13px;font-size:16px}.btn2{background:var(--card);border:1px solid #243046;color:var(--tx);border-radius:14px;padding:13px;font-size:16px}
-.card{background:var(--card);border:1px solid #243046;border-radius:16px;padding:14px;margin:12px 0}.card h3{margin:0 0 6px;font-size:13px;color:var(--mu);text-transform:uppercase;letter-spacing:1px}
-#status{text-align:center;color:var(--a);min-height:22px;font-size:14px}.ans{white-space:pre-wrap;line-height:1.45}
-input,select,textarea{width:100%;background:#0e1420;border:1px solid #243046;color:var(--tx);border-radius:12px;padding:12px;font-size:16px}label{display:block;margin:10px 0 4px;color:var(--mu);font-size:14px}
-.sw{display:flex;align-items:center;justify-content:space-between}.sw input{width:auto;transform:scale(1.4)}
-a{color:var(--a)}ol{padding-left:20px;line-height:1.6}img#prev{max-width:100%;border-radius:12px;display:none;margin-top:8px}
-dialog{background:var(--bg);color:var(--tx);border:1px solid #243046;border-radius:18px;width:min(94vw,480px);max-height:90vh}dialog::backdrop{background:#000a}
-</style></head><body>
-<header><h1>🎧 <span>OtoCue</span></h1><button class="ib" id="setBtn">⚙ Settings</button></header>
-<div class="tabs"><button data-t="assist" class="on">Assist</button><button data-t="translate">Translate</button><button data-t="photo">Photo</button></div>
-<div id="status"></div>
+<title>OtoCue</title><meta name="theme-color" content="#07040f"><link rel="manifest" href="manifest.json"><link rel="icon" href="icon.svg"><link rel="apple-touch-icon" href="icon-192.png"><meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet"><link rel="stylesheet" href="styles.css"></head><body>
+<div class="bg" aria-hidden="true"><i></i><i></i><i></i></div>
+<header><h1><span>OtoCue</span></h1><button class="ib" id="setBtn" aria-label="Settings">⚙️</button></header>
+<p id="greet" class="greet">Hello, J</p>
+<div class="tabs"><button data-t="assist" class="on">🎧 Assist</button><button data-t="translate">🌐 Translate</button><button data-t="photo">📷 Photo</button></div>
+<div id="status" aria-live="polite"></div>
 <section class="panel on" id="assist">
- <button id="ask" aria-label="Ask">Ask</button>
- <p class="hint">Tap = ask a question · Double‑tap = Soft Listen (30s)</p>
- <div class="row"><button class="btn2" id="softBtn">👂 Soft Listen 30s</button><button class="btn2" id="stopBtn">⏹ Stop</button></div>
- <div class="row"><button class="btn2" id="contactsBtn">👥 Share Contacts</button></div>
- <div class="card sw"><div><b>“Hey Cue” wake word</b><div class="hint" style="text-align:left">Only works while the app is open &amp; screen on (browser limit). Best in Chrome/Android.</div></div><input type="checkbox" id="wake"></div>
+ <div class="stage" id="stage" data-state="idle">
+  <div class="orbwrap"><span class="ring"></span><span class="ring r2"></span><span class="ring r3"></span>
+   <button id="ask" aria-label="Ask"><span class="core"></span><span class="lbl">Ask</span></button></div>
+  <button id="msgBtn" class="msgfab" aria-label="Message">💬<small>Message</small></button>
+ </div>
+ <p class="hint">Tap = ask or command (“call Mom”, “timer 5 minutes”) · Double‑tap = Soft Listen (30s)</p>
+ <div id="you" class="live">—</div>
+ <div id="cfm" class="card glass cfm" hidden><div id="cfmTxt"></div><div class="row"><button class="btn2" id="cfmNo">✕ Cancel</button><button class="btn" id="cfmYes">✓ Confirm</button></div></div>
+ <div id="timers"></div>
+ <div class="chips">
+  <button class="chip c1" id="softBtn"><b>👂</b>Soft Listen 30s</button>
+  <button class="chip c2" id="stopBtn"><b>⏹</b>Stop</button>
+  <button class="chip c3" id="contactsBtn"><b>👥</b>Share Contacts</button>
+  <button class="chip c4" id="replay"><b>🔊</b>Replay</button>
+ </div>
+ <div class="card glass sw"><div><b>“Hey Cue” wake word</b><div class="hint" style="text-align:left">Only works while the app is open &amp; screen on (browser limit). Best in Chrome/Android.</div></div><input type="checkbox" id="wake"></div>
 </section>
-<section class="panel" id="translate">
+<section class="panel" id="translate"><div class="card glass">
  <label>Translate into</label><select id="lang"></select>
  <button class="btn" id="trBtn" style="width:100%;margin-top:12px">🎙 Listen &amp; Translate</button>
- <p class="hint">Speak in any language; translation is spoken in your earbuds.</p>
+ <p class="hint">Speak in any language; translation is spoken in your earbuds.</p></div>
 </section>
-<section class="panel" id="photo">
+<section class="panel" id="photo"><div class="card glass">
  <label>Photo</label><input type="file" id="pfile" accept="image/*" capture="environment"><img id="prev" alt="">
  <label>Question</label><textarea id="pq" rows="2" placeholder="What is this?"></textarea>
- <div class="row"><button class="btn2" id="pmic">🎙 Speak question</button><button class="btn" id="pgo">Ask about photo</button></div>
+ <div class="row"><button class="btn2" id="pmic">🎙 Speak question</button><button class="btn" id="pgo">Ask about photo</button></div></div>
 </section>
-<div class="card"><h3>You</h3><div id="you" class="ans">—</div></div>
-<div class="card"><h3>OtoCue</h3><div id="out" class="ans">Set your free Gemini key in Settings, connect your earbuds, then tap Ask.</div><div class="row"><button class="btn2" id="replay">🔊 Replay</button></div></div>
+<div id="chat" class="chat" aria-live="polite"></div>
+<div id="out" class="sr">Set your free Gemini key in Settings, connect your earbuds, then tap Ask.</div>
+<dialog id="msgDlg"><h2>💬 Send a message</h2>
+ <div id="mStep1"><label>Choose a contact</label><div id="mList" class="mlist"></div>
+  <button class="btn2" id="mPick" style="width:100%">📱 Pick from phone</button>
+  <label>Or enter a number</label><input id="mNum" type="tel" inputmode="tel" placeholder="+1 555 123 4567"></div>
+ <div id="mTo" class="hint" style="text-align:left"></div>
+ <label>Message</label><textarea id="mText" rows="3" placeholder="Speak or type your message"></textarea>
+ <div class="row"><button class="btn2" id="mMic">🎙 Speak</button><button class="btn" id="mSend">Send ➤</button></div>
+ <div class="row"><button class="btn2" id="mClose">Cancel</button></div>
+</dialog>
 <dialog id="dlg"><h2>Settings</h2>
  <ol><li>Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> and sign in with Google.</li><li>Tap <b>Create API key</b> and copy it (free tier).</li><li>Paste it below and tap Save.</li></ol>
  <label>Gemini API key (stored only on this device)</label><input id="key" type="password" autocomplete="off" placeholder="AIza...">
