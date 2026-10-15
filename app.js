@@ -10,15 +10,18 @@ let lastAnswer='',busy=false,curRec=null,wakeRec=null,wakeOn=false,stopFn=null;
 const status=t=>$('#status').textContent=t||'';
 
 const FALLBACKS=['gemini-flash-latest','gemini-3.6-flash','gemini-2.5-flash'];
+let noSearch=false;
+function timeCtx(){const d=new Date(),tz=Intl.DateTimeFormat().resolvedOptions().timeZone;return ` The current date and time for the user is ${d.toLocaleString('en-US',{timeZone:tz,dateStyle:'full',timeStyle:'long'})} (time zone ${tz}); exact UTC time ${d.toISOString()}. Use this for any question about the current time or date anywhere, converting time zones yourself. Use Google Search for anything current (weather, news, scores, prices, hours).`}
 function buildRequest(parts,system,model){
  const key=S.key; if(!key) throw new Error('Add your free Gemini API key in Settings first.');
  return {url:`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model||S.model)}:generateContent`,
   init:{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},
-  body:JSON.stringify({systemInstruction:{parts:[{text:system}]},contents:[{role:'user',parts}]})}};
+  body:JSON.stringify(Object.assign({systemInstruction:{parts:[{text:system+timeCtx()}]},contents:[{role:'user',parts}]},noSearch?{}:{tools:[{google_search:{}}]}))}};
 }
 async function gemini(parts,system=SYS,model){
  const {url,init}=buildRequest(parts,system,model);
  const r=await fetch(url,init);
+ if(!noSearch&&(r.status===429||r.status===400||r.status===403)){noSearch=true;try{return await gemini(parts,system,model)}finally{setTimeout(()=>{noSearch=false},60000)}}
  if((r.status===503||r.status===429)&&!model){ for(const m of FALLBACKS) if(m!==S.model){ try{return await gemini(parts,system,m)}catch(_){} } } const j=await r.json().catch(()=>({}));
  if(!r.ok) throw new Error(j.error?.message||('Gemini error '+r.status));
  const t=(j.candidates?.[0]?.content?.parts||[]).map(p=>p.text||'').join('').trim();
