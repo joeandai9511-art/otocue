@@ -143,7 +143,7 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{document.que
 $('#lang').innerHTML=LANGS.map(l=>`<option>${l}</option>`).join(''); $('#lang').value=localStorage.getItem('otocue_lang')||'Spanish';
 function fillVoices(){const vs=speechSynthesis.getVoices();$('#voice').innerHTML='<option value="">Default</option>'+vs.map(v=>`<option value="${v.name.replace(/"/g,'&quot;')}">${v.name} (${v.lang})</option>`).join('');$('#voice').value=S.voice}
 if('speechSynthesis' in window){fillVoices();speechSynthesis.onvoiceschanged=fillVoices}
-$('#setBtn').onclick=()=>{$('#cfmSet').checked=confirmOn();$('#key').value=S.key;$('#model').value=S.model;$('#rate').value=S.rate;$('#voice').value=S.voice;$('#dlg').showModal()};
+$('#setBtn').onclick=()=>{{const ps=document.getElementById('playSrc');if(ps)ps.textContent='Last play source: '+(localStorage.getItem('otocue_playsrc')||'none yet')}$('#cfmSet').checked=confirmOn();$('#key').value=S.key;$('#model').value=S.model;$('#rate').value=S.rate;$('#voice').value=S.voice;$('#dlg').showModal()};
 $('#close').onclick=()=>$('#dlg').close();
 $('#save').onclick=()=>{localStorage.setItem('otocue_key',$('#key').value.trim());localStorage.setItem('otocue_model',$('#model').value.trim()||DEF_MODEL);localStorage.setItem('otocue_voice',$('#voice').value);localStorage.setItem('otocue_rate',$('#rate').value);localStorage.setItem('otocue_confirm',$('#cfmSet').checked?'1':'0');$('#dlg').close();status('Settings saved ✓');if(S.key)$('#out').textContent='Ready. Tap Ask.'};
 
@@ -277,13 +277,21 @@ let lastQ='';const PLAYAPPS={spotify:['Spotify',(e,p)=>'https://open.spotify.com
  disney:['Disney+',e=>'https://www.disneyplus.com/search?q='+e],'prime video':['Prime Video',e=>'https://www.amazon.com/s?k='+e+'&i=instant-video'],max:['HBO Max',e=>'https://play.hbomax.com/search?q='+e],
  'youtube music':['YouTube Music',e=>'https://music.youtube.com/search?q='+e],'apple music':['Apple Music',e=>'https://music.apple.com/us/search?term='+e],pandora:['Pandora',e=>'https://www.pandora.com/search/'+e+'/all']};
 // top YouTube video via free no-key APIs (CORS-enabled); falls back to search results
-const YT_SRC=[q=>['https://api.piped.private.coffee/search?q='+q+'&filter=videos',j=>((j.items||[]).find(x=>/watch\?v=/.test(x.url||''))||{}).url?.split('v=')[1]],
- q=>['https://invidious.f5.si/api/v1/search?q='+q+'&type=video',j=>((Array.isArray(j)?j:[]).find(x=>x.videoId)||{}).videoId],
- q=>['https://iv.melmac.space/api/v1/search?q='+q+'&type=video',j=>((Array.isArray(j)?j:[]).find(x=>x.videoId)||{}).videoId],
- q=>['https://pipedapi.kavin.rocks/search?q='+q+'&filter=videos',j=>((j.items||[]).find(x=>/watch\?v=/.test(x.url||''))||{}).url?.split('v=')[1]]];
-async function ytTop(q){const e=encodeURIComponent(q),t0=Date.now();
- for(const f of YT_SRC){if(Date.now()-t0>6000)break;const [u,pick]=f(e);try{const ac=new AbortController(),tm=setTimeout(()=>ac.abort(),2500);const r=await fetch(u,{signal:ac.signal});clearTimeout(tm);if(!r.ok)continue;const id=pick(await r.json());if(id&&/^[\w-]{11}$/.test(id))return 'https://www.youtube.com/watch?v='+id}catch(_){}}
- return 'https://www.youtube.com/results?search_query='+e}
+// "play X": race free Piped/Invidious instances, then Gemini+Google Search (validated via oEmbed), then search results
+const YT_SRC=[['piped.private.coffee','https://api.piped.private.coffee/search?q=%s&filter=videos','p'],['invidious.f5.si','https://invidious.f5.si/api/v1/search?q=%s&type=video','i'],
+ ['iv.melmac.space','https://iv.melmac.space/api/v1/search?q=%s&type=video','i']];
+const tfetch=(u,ms,o={})=>{const ac=new AbortController(),t=setTimeout(()=>ac.abort(),ms);return fetch(u,{...o,signal:ac.signal}).finally(()=>clearTimeout(t))};
+async function ytInstances(e){const errs=[];return Promise.any(YT_SRC.map(async([name,u,k])=>{try{const r=await tfetch(u.replace('%s',e),6000);if(!r.ok)throw new Error(r.status);const j=await r.json();
+ const id=k==='p'?(((j.items||[]).find(x=>/watch\?v=/.test(x.url||''))||{}).url||'').split('v=')[1]:((Array.isArray(j)?j:[]).find(x=>x.videoId)||{}).videoId;if(!id||!/^[\w-]{11}$/.test(id))throw new Error('no id');return{id,src:name}}catch(x){errs.push(name+':'+(x.name==='AbortError'?'timeout':x.message));throw x}})).catch(()=>{throw new Error(errs.join(', '))})}
+async function ytOembed(id){try{const r=await tfetch('https://www.youtube.com/oembed?url='+encodeURIComponent('https://www.youtube.com/watch?v='+id)+'&format=json',5000);return r.ok}catch(_){return false}}
+async function ytGemini(q){if(!S.key)throw new Error('no key');const {url,init}=buildRequest([{text:`Find the official YouTube video for: "${q}". Reply with ONLY the 11-character YouTube video ID, nothing else.`}],'You find YouTube video IDs using Google Search. Output only the ID.',undefined,[],true);
+ const r=await tfetch(url,9000,init);if(!r.ok)throw new Error('gemini '+r.status);const j=await r.json(),t=(j.candidates?.[0]?.content?.parts||[]).filter(x=>!x.thought).map(x=>x.text||'').join(' ');
+ const ids=[...new Set([...(t.match(/(?:v=|youtu\.be\/|^|\s)([\w-]{11})(?=\b|$)/g)||[])].map(x=>x.slice(-11)))];for(const id of ids)if(await ytOembed(id))return{id,src:'gemini+oembed'};throw new Error('gemini: no valid id')}
+function logPlay(src,q,extra){const v=`${src} · “${q}” · ${new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}${extra?' · '+extra:''}`;localStorage.setItem('otocue_playsrc',v);console.info('[OtoCue] play source:',v)}
+async function ytTop(q){const e=encodeURIComponent(q);let why='';
+ const work=(async()=>{try{return await ytInstances(e)}catch(x){why=x.message}try{return await ytGemini(q)}catch(x){why+=(why?'; ':'')+x.message}return null})();
+ const r=await Promise.race([work,sleep(15000).then(()=>null)]);
+ if(r){logPlay(r.src,q);return 'https://www.youtube.com/watch?v='+r.id}logPlay('search results (fallback)',q,why||'timeout');return 'https://www.youtube.com/results?search_query='+e}
 function lastTopic(){return lastQ?lastQ.toLowerCase().replace(/[?.!]/g,'').split(/\s+/).filter(w=>!/^(what|which|where|how|who|does|do|did|is|are|should|can|could|would|my|i|me|a|an|the|need|needs|best|kind|of|type|for|to|eat|use|good|recommend|you)$/.test(w)).join(' '):''}
 async function buyCmd(you,q){let prod=q,store='',tips='',cat='';status('Finding where to buy…');
  try{const ctx=HIST.slice(-4).map(h=>(h.role==='user'?'User: ':'Assistant: ')+h.parts[0].text).join('\n');
