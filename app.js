@@ -92,8 +92,9 @@ async function run(label,fn){ if(busy) return; busy=true; $('#ask').classList.ad
 async function doAsk(pre){ await run('ask',async()=>{
  let heard; if(pre) heard={text:pre}; else {status('Listening… ask your question');speechSynthesis.cancel();heard=await listen({ms:SR?0:7000,fallback:true});}
  if(!heard.audio&&!heard.text){status('Didn\'t catch that.');return}
+ {const bm=document.getElementById('buyMaps');if(bm)bm.remove()}
  if(heard.text&&await localCmd(heard.text)) return;
- status('Thinking…'); const q=heard.audio?partsFrom(heard,'Answer the question asked in this audio.'):[{text:heard.text}]; const a=await gemini(q,SYS,undefined,HIST.slice(-12));
+ if(heard.text)lastQ=heard.text; status('Thinking…'); const q=heard.audio?partsFrom(heard,'Answer the question asked in this audio.'):[{text:heard.text}]; const a=await gemini(q,SYS,undefined,HIST.slice(-12));
  HIST.push({role:'user',parts:[{text:heard.text||'(voice question)'}]},{role:'model',parts:[{text:a}]}); while(HIST.length>12) HIST.shift();
  status(''); show(heard.text??'(voice)',a); });}
 async function doSoft(){ await run('soft',async()=>{ status('Soft Listen: listening for 30s…'); speechSynthesis.cancel();
@@ -220,6 +221,21 @@ function say(you,t){status('');show(you,t)}
 function sayNoContact(you,name){say(you,`I couldn't find “${name}” in your shared contacts. Tap 💬 Message to pick one or enter a number.`)}
 const confirmOn=()=>localStorage.getItem('otocue_confirm')!=='0';
 // open a URL right away: new tab with a fresh user gesture, same tab otherwise; big tap fallback if blocked
+let lastQ='';function lastTopic(){return lastQ?lastQ.toLowerCase().replace(/[?.!]/g,'').split(/\s+/).filter(w=>!/^(what|which|where|how|who|does|do|did|is|are|should|can|could|would|my|i|me|a|an|the|need|needs|best|kind|of|type|for|to|eat|use|good|recommend|you)$/.test(w)).join(' '):''}
+async function buyCmd(you,q){let prod=q,store='',tips='',cat='';status('Finding where to buy…');
+ try{const ctx=HIST.slice(-4).map(h=>(h.role==='user'?'User: ':'Assistant: ')+h.parts[0].text).join('\n');
+  const r=await geminiRaw([{text:(ctx?'Conversation:\n'+ctx+'\n\n':'')+'User now asks: "'+you+'"\n'+(q?'The product is: '+q+'.\n':'Work out which specific product the user wants to buy from the conversation.\n')+'Reply on ONE line exactly as: product name | store type for a maps search (plural, e.g. pet stores) | two well-known US retailers | category (one of: pet, home, electronics, pharmacy, auto, other). No other text.'}],'You extract shopping intent. Output only the requested single line.',undefined,[],false);
+  const f=r.split('\n')[0].split('|').map(x=>x.trim().replace(/^["*]+|["*.]+$/g,''));if(!q&&f[0])prod=f[0];store=f[1]||'';tips=f[2]||'';cat=(f[3]||'').toLowerCase()}catch(_){}
+ if(!prod)prod=lastTopic();status('');if(!prod){say(you,'What would you like to buy? Say "where can I buy" and the product.');return}
+ prod=prod.toLowerCase();store=(store||'stores').toLowerCase();
+ openNow(you,`Here's where to buy ${prod}.`+(tips?` You can also try ${tips.replace(/\s*,\s*/,' or ')} nearby.`:''),'https://www.google.com/search?tbm=shop&q='+encodeURIComponent(prod));
+ if(!CATS[cat])cat=catOf(prod+' '+store);if(store==='stores'&&cat)store={pet:'pet stores',home:'hardware stores',electronics:'electronics stores',pharmacy:'pharmacies',auto:'auto parts stores'}[cat];
+ const box=document.createElement('div');box.id='buyMaps';box.className='row buyrow';const mk=(t,u)=>{const a=document.createElement('a');a.className='btn2';a.target='_blank';a.rel='noopener';a.href=u;a.textContent=t;box.appendChild(a)};
+ mk('📍 '+store[0].toUpperCase()+store.slice(1)+' near me','https://www.google.com/maps/search/'+encodeURIComponent(store).replace(/%20/g,'+')+'+near+me');
+ for(const k of ['amazon','walmart','target',...(CATS[cat]||[])])mk(STORES[k][0],STORES[k][1]+encodeURIComponent(prod));$('#timers').before(box)}
+const STORES={amazon:['Amazon','https://www.amazon.com/s?k='],walmart:['Walmart','https://www.walmart.com/search?q='],target:['Target','https://www.target.com/s?searchTerm='],petco:['Petco','https://www.petco.com/shop/en/petcostore/search?query='],petsmart:['PetSmart','https://www.petsmart.com/search/?q='],chewy:['Chewy','https://www.chewy.com/s?query='],homedepot:['Home Depot','https://www.homedepot.com/s/'],lowes:["Lowe's",'https://www.lowes.com/search?searchTerm='],bestbuy:['Best Buy','https://www.bestbuy.com/site/searchpage.jsp?st='],cvs:['CVS','https://www.cvs.com/search?searchTerm='],walgreens:['Walgreens','https://www.walgreens.com/search/results.jsp?Ntt='],autozone:['AutoZone','https://www.autozone.com/searchresult?searchText=']};
+const CATS={pet:['petco','petsmart','chewy'],home:['homedepot','lowes'],electronics:['bestbuy'],pharmacy:['cvs','walgreens'],auto:['autozone']};
+function catOf(t){t=t.toLowerCase();return /\b(pet|dog|cat|puppy|kitten|parrot|bird|fish|aquarium|hamster|rabbit|reptile|litter|kibble|leash|pellets?)\b/.test(t)?'pet':/\b(drill|tools?|paint|lumber|hardware|faucet|plumbing|garden|mulch|screws?|hammer|ladder|home improvement)\b/.test(t)?'home':/\b(tv|laptop|phone|iphone|headphones?|earbuds|airpods|camera|charger|monitor|tablet|ipad|console|electronics?)\b/.test(t)?'electronics':/\b(medicine|vitamins?|tylenol|advil|ibuprofen|allergy|pharmac\w*|bandages?|cough|cold|prescription|health)\b/.test(t)?'pharmacy':/\b(car|motor oil|oil filter|brake|tires?|wiper|battery|spark plugs?|auto\w*)\b/.test(t)?'auto':''}
 function openNow(you,msg,url){if(you!==null)say(you,msg);window.OtoCue.lastUrl=url;const web=/^https?:/.test(url),act=!navigator.userActivation||navigator.userActivation.isActive;
  const fb=()=>{let b=$('#tapOpen');if(!b){b=document.createElement('a');b.id='tapOpen';b.className='btn';b.target='_blank';b.rel='noopener';$('#timers').before(b)}b.href=url;b.textContent='▶ Tap to '+(/^tel:/.test(url)?'call':/^(sms|mailto):/.test(url)?'send':/Playing/.test(msg)?'play':'open');b.onclick=()=>setTimeout(()=>b.remove(),300);b.hidden=false;window.OtoCue.fallback=true};
  if(web&&act){const w=window.open(url,'_blank');if(!w)fb();return}
@@ -239,6 +255,8 @@ let timers=0;function startTimer(you,n,unit){const ms=n*(/^h/.test(unit)?3600e3:
  const iv=setInterval(tick,1000);(window._tmr=window._tmr||[]).push({el,iv,end,lbl});tick();say(you,`Timer set for ${lbl}.`)}
 const NUMW={a:1,an:1,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,fifteen:15,twenty:20,thirty:30,forty:40,'forty five':45,sixty:60};
 function parseCmd(raw){const t=raw.trim().replace(/[.?!]+$/,''),l=t.toLowerCase();let m;
+ if(m=l.match(/^(?:please\s+)?(?:buy|order|find|get|search|shop for|look for|look up)\s+(?:me\s+)?(.+?)\s+(?:on|at|from)\s+(amazon|walmart|target|petco|petsmart|chewy|home depot|lowe'?s|best buy|cvs|walgreens|autozone)(?:\.com)?$/))return{k:'store',q:m[1].replace(/^(?:some|a|an|the)\s+/,''),st:m[2].replace(/'/g,'').replace(' ','')};
+ if(m=l.match(/^(?:so\s+|ok\s+|okay\s+|and\s+)?(?:where|how)\s+(?:can|could|do|should|would)\s+(?:i|we)\s+(?:buy|purchase|get|order)\s*(.*?)(?:\s+(?:from|online|near me|nearby))?$/))if(!/^(?:to|there|home|back|in|out|on|rid)\b/.test(m[1])){const x=m[1].replace(/^(?:some|a|an|the)\s+/,'').trim();return{k:'buy',q:/^(?:it|that|this|them|those|these|one|some|any|stuff|)$/.test(x)?'':x}}
  if(m=l.match(/^(?:please\s+)?(?:call|phone|dial|ring)\s+(.+)$/))return{k:'call',who:t.slice(t.length-m[1].length)};
  if(m=t.match(/^(?:please\s+)?(?:send\s+(?:a\s+)?(?:text|message|sms)\s+to|text|message|send\s+(?:a\s+)?(?:text|message)\s+)\s*(.+?)(?:\s*,?\s+(?:that|saying|says|and say|to say)\s+|\s*:\s*)(.+)$/i))return{k:'text',who:m[1],msg:m[2]};
  if(m=t.match(/^(?:please\s+)?(?:send\s+(?:a\s+)?(?:text|message)\s+to|text|message)\s+(\S+(?:\s\S+)?)$/i))return{k:'text',who:m[1],msg:''};
@@ -269,6 +287,8 @@ function parseCmd(raw){const t=raw.trim().replace(/[.?!]+$/,''),l=t.toLowerCase(
  return null}
 let localCmd=async function(text){const c=parseCmd(text);if(!c)return false;const you=text;
  switch(c.k){
+  case 'store':openNow(you,`Searching ${STORES[c.st][0]} for ${c.q}.`,STORES[c.st][1]+encodeURIComponent(c.q));break;
+  case 'buy':await buyCmd(you,c.q);break;
   case 'call':{const p=findContact(c.who),dig=c.who.replace(/[^+\d]/g,'');if(!p&&dig.length>=3){await confirmRun(you,`Calling ${c.who}.`,'tel:'+dig);break}
    if(!p||!p.tel){sayNoContact(you,c.who);break}await confirmRun(you,`Calling ${p.name}.`,'tel:'+p.tel.replace(/[^+\d]/g,''));break}
   case 'text':{const p=findContact(c.who);if(!p||!p.tel){sayNoContact(you,c.who);break}
