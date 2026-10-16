@@ -59,12 +59,12 @@ async function gemini(parts,system=SYS,model,hist){
 const SYS='You are OtoCue, a concise AI assistant heard through an earpiece. Answer in 1-4 short spoken sentences, plain text, no markdown or lists. You cannot set alarms, timers, reminders, make calls, send texts or emails, or take any action on the device yourself; the app handles those only when the user uses command phrasing. Never claim you have done or set anything. If asked, say to use a command like "wake me up at 7 AM to <song>", "set an alarm for 6:30", "timer 5 minutes", "call Mom", "text Mom that I am on my way", "email Mom subject Dinner I will be late", "post to X <text>" or "share this".';
 
 function speak(text,lang){
- if(!('speechSynthesis' in window)) return; speechSynthesis.cancel();
+ window._speechDone=Promise.resolve();if(!('speechSynthesis' in window)) return; speechSynthesis.cancel();
  const u=new SpeechSynthesisUtterance(text.replace(/[*#_`]/g,'')); u.rate=S.rate;
  const vs=speechSynthesis.getVoices();
  lang=lang||ulang();let v=lang?vs.find(x=>x.lang.replace('_','-').startsWith(lang.slice(0,2))):vs.find(x=>x.name===S.voice);
  if(v){u.voice=v;u.lang=v.lang} else if(lang) u.lang=lang;
- u.onend=()=>{if(wakeOn) startWake()}; pauseWake(); speechSynthesis.speak(u);
+ let fin;window._speechDone=new Promise(r=>fin=r);u.onerror=()=>fin();u.onend=()=>{fin();if(wakeOn) startWake()}; pauseWake(); speechSynthesis.speak(u);
 }
 function show(you,ans,lang){ if(you!=null)$('#you').textContent=you; $('#out').textContent=ans; lastAnswer=ans; window._lastLang=lang; speak(ans,lang); }
 
@@ -159,7 +159,7 @@ $('#contactsBtn').onclick=async()=>{
  status('Tap Select all (or pick everyone you text/call), then Done. You only do this once.');try{const r=await navigator.contacts.select(['name','tel'],{multiple:true});
   const c=r.map(x=>({name:(x.name||[])[0]||'',tel:(x.tel||[])[0]||'',email:(x.email||[])[0]||''}));
   const n=mergeContacts(c);status(`Shared ${c.length} contact(s) with OtoCue (${n} saved).`)}catch(e){status('Contacts: '+e.message)}};
-(function(){const o=$('#out');if(!o)return;new MutationObserver(()=>{const t=o.textContent,m=t.match(/\[(CALL|TEXT):([^\]]+)\]/);if(m){o.textContent=t.replace(m[0],'');location.href=(m[1]==='CALL'?'tel:':'sms:')+m[2].replace(/[^+\d]/g,'')}}).observe(o,{childList:true,characterData:true,subtree:true})})();
+(function(){const o=$('#out');if(!o)return;new MutationObserver(()=>{const t=o.textContent,m=t.match(/\[(CALL|TEXT):([^\]]+)\]/);if(m){o.textContent=t.replace(m[0],'');const u=(m[1]==='CALL'?'tel:':'sms:')+m[2].replace(/[^+\d]/g,'');afterSpeech().then(()=>{location.href=u})}}).observe(o,{childList:true,characterData:true,subtree:true})})();
 
 // ---- v2 UI layer (visuals, chat, haptics, message)
 (function(){
@@ -273,7 +273,15 @@ function say(you,t){status('');show(you,t)}
 function sayNoContact(you,name){say(you,`I couldn't find “${name}” in your contacts. Add them in Settings → Contacts.`)}
 const confirmOn=()=>localStorage.getItem('otocue_confirm')!=='0';
 // open a URL right away: new tab with a fresh user gesture, same tab otherwise; big tap fallback if blocked
-let lastQ='';function lastTopic(){return lastQ?lastQ.toLowerCase().replace(/[?.!]/g,'').split(/\s+/).filter(w=>!/^(what|which|where|how|who|does|do|did|is|are|should|can|could|would|my|i|me|a|an|the|need|needs|best|kind|of|type|for|to|eat|use|good|recommend|you)$/.test(w)).join(' '):''}
+let lastQ='';// top YouTube video via free no-key APIs (CORS-enabled); falls back to search results
+const YT_SRC=[q=>['https://api.piped.private.coffee/search?q='+q+'&filter=videos',j=>((j.items||[]).find(x=>/watch\?v=/.test(x.url||''))||{}).url?.split('v=')[1]],
+ q=>['https://invidious.f5.si/api/v1/search?q='+q+'&type=video',j=>((Array.isArray(j)?j:[]).find(x=>x.videoId)||{}).videoId],
+ q=>['https://iv.melmac.space/api/v1/search?q='+q+'&type=video',j=>((Array.isArray(j)?j:[]).find(x=>x.videoId)||{}).videoId],
+ q=>['https://pipedapi.kavin.rocks/search?q='+q+'&filter=videos',j=>((j.items||[]).find(x=>/watch\?v=/.test(x.url||''))||{}).url?.split('v=')[1]]];
+async function ytTop(q){const e=encodeURIComponent(q),t0=Date.now();
+ for(const f of YT_SRC){if(Date.now()-t0>6000)break;const [u,pick]=f(e);try{const ac=new AbortController(),tm=setTimeout(()=>ac.abort(),2500);const r=await fetch(u,{signal:ac.signal});clearTimeout(tm);if(!r.ok)continue;const id=pick(await r.json());if(id&&/^[\w-]{11}$/.test(id))return 'https://www.youtube.com/watch?v='+id}catch(_){}}
+ return 'https://www.youtube.com/results?search_query='+e}
+function lastTopic(){return lastQ?lastQ.toLowerCase().replace(/[?.!]/g,'').split(/\s+/).filter(w=>!/^(what|which|where|how|who|does|do|did|is|are|should|can|could|would|my|i|me|a|an|the|need|needs|best|kind|of|type|for|to|eat|use|good|recommend|you)$/.test(w)).join(' '):''}
 async function buyCmd(you,q){let prod=q,store='',tips='',cat='';status('Finding where to buy…');
  try{const ctx=HIST.slice(-4).map(h=>(h.role==='user'?'User: ':'Assistant: ')+h.parts[0].text).join('\n');
   const r=await geminiRaw([{text:(ctx?'Conversation:\n'+ctx+'\n\n':'')+'User now asks: "'+you+'"\n'+(q?'The product is: '+q+'.\n':'Work out which specific product the user wants to buy from the conversation.\n')+'Reply on ONE line exactly as: product name | store type for a maps search (plural, e.g. pet stores) | two well-known US retailers | category (one of: pet, home, electronics, pharmacy, auto, other). No other text.'}],'You extract shopping intent. Output only the requested single line.',undefined,[],false);
@@ -288,10 +296,17 @@ async function buyCmd(you,q){let prod=q,store='',tips='',cat='';status('Finding 
 const STORES={amazon:['Amazon','https://www.amazon.com/s?k='],walmart:['Walmart','https://www.walmart.com/search?q='],target:['Target','https://www.target.com/s?searchTerm='],petco:['Petco','https://www.petco.com/shop/en/petcostore/search?query='],petsmart:['PetSmart','https://www.petsmart.com/search/?q='],chewy:['Chewy','https://www.chewy.com/s?query='],homedepot:['Home Depot','https://www.homedepot.com/s/'],lowes:["Lowe's",'https://www.lowes.com/search?searchTerm='],bestbuy:['Best Buy','https://www.bestbuy.com/site/searchpage.jsp?st='],cvs:['CVS','https://www.cvs.com/search?searchTerm='],walgreens:['Walgreens','https://www.walgreens.com/search/results.jsp?Ntt='],autozone:['AutoZone','https://www.autozone.com/searchresult?searchText=']};
 const CATS={pet:['petco','petsmart','chewy'],home:['homedepot','lowes'],electronics:['bestbuy'],pharmacy:['cvs','walgreens'],auto:['autozone']};
 function catOf(t){t=t.toLowerCase();return /\b(pet|dog|cat|puppy|kitten|parrot|bird|fish|aquarium|hamster|rabbit|reptile|litter|kibble|leash|pellets?)\b/.test(t)?'pet':/\b(drill|tools?|paint|lumber|hardware|faucet|plumbing|garden|mulch|screws?|hammer|ladder|home improvement)\b/.test(t)?'home':/\b(tv|laptop|phone|iphone|headphones?|earbuds|airpods|camera|charger|monitor|tablet|ipad|console|electronics?)\b/.test(t)?'electronics':/\b(medicine|vitamins?|tylenol|advil|ibuprofen|allergy|pharmac\w*|bandages?|cough|cold|prescription|health)\b/.test(t)?'pharmacy':/\b(car|motor oil|oil filter|brake|tires?|wiper|battery|spark plugs?|auto\w*)\b/.test(t)?'auto':''}
-function openNow(you,msg,url){if(you!==null)say(you,msg);window.OtoCue.lastUrl=url;const web=/^https?:/.test(url),act=!navigator.userActivation||navigator.userActivation.isActive;
- const fb=()=>{let b=$('#tapOpen');if(!b){b=document.createElement('a');b.id='tapOpen';b.className='btn';b.target='_blank';b.rel='noopener';$('#timers').before(b)}b.href=url;b.textContent='▶ Tap to '+(/^tel:/.test(url)?'call':/^(sms|mailto):/.test(url)?'send':/Playing/.test(msg)?'play':'open');b.onclick=()=>setTimeout(()=>b.remove(),300);b.hidden=false;window.OtoCue.fallback=true};
- if(web&&act){const w=window.open(url,'_blank');if(!w)fb();return}
- fb();setTimeout(()=>{location.href=url},web?700:0)}
+// leave the app only after the spoken line has finished (no chopped voice). url may be a Promise (e.g. resolving a video id).
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function afterSpeech(){return Promise.race([window._speechDone||Promise.resolve(),sleep(4500)])}
+function openNow(you,msg,url){const short=msg.length<=90;
+ if(you!==null){if(short)say(you,msg);else{status('');$('#you').textContent=you;$('#out').textContent=msg;lastAnswer=msg;window._speechDone=Promise.resolve()}}
+ const fb=u=>{let b=$('#tapOpen');if(!b){b=document.createElement('a');b.id='tapOpen';b.className='btn';b.target='_blank';b.rel='noopener';$('#timers').before(b)}b.href=u;b.textContent='▶ Tap to '+(/^tel:/.test(u)?'call':/^(sms|mailto):/.test(u)?'send':/Playing/.test(msg)?'play':'open');b.onclick=()=>setTimeout(()=>b.remove(),300);b.hidden=false;window.OtoCue.fallback=true};
+ const urlP=Promise.resolve(url).catch(()=>null);
+ return Promise.all([you!==null&&short?afterSpeech():Promise.resolve(),urlP,sleep(600)]).then(([,u])=>{u=u||(typeof url==='string'?url:'');if(!u)return;window.OtoCue.lastUrl=u;window.OtoCue.openedAt=Date.now();
+  const tb=$('#tapOpen');if(tb)tb.remove();
+  if(/^https?:/.test(u)&&navigator.userActivation&&navigator.userActivation.isActive){const w=window.open(u,'_blank');if(w)return}
+  fb(u);location.href=u})}
 async function confirmRun(you,msg,url){if(!confirmOn()){openNow(you,msg,url);return}show(you,msg+' Say yes or tap Confirm.');const box=$('#cfm');box.hidden=false;$('#cfmTxt').textContent=msg;
  const r=await new Promise(res=>{let done=false;const fin=v=>{if(done)return;done=true;box.hidden=true;stopFn&&stopFn();res(v)};window._cfm=fin;
   $('#cfmYes').onclick=()=>fin(true);$('#cfmNo').onclick=()=>fin(false);
@@ -350,7 +365,7 @@ let localCmd=async function(text){const c=parseCmd(text);if(!c)return false;cons
   case 'movie':openNow(you,`Opening tickets for ${c.q} on Fandango.`,'https://www.fandango.com/search?q='+encodeURIComponent(c.q)+'&mode=all');break;
   case 'nav':openNow(you,`Getting directions to ${c.q}.`,'https://www.google.com/maps/dir/?api=1&destination='+encodeURIComponent(c.q));break;
   case 'search':openNow(you,`Searching Google for ${c.q}.`,'https://www.google.com/search?q='+encodeURIComponent(c.q));break;
-  case 'play':openNow(you,`Playing ${c.q} on ${c.on==='spotify'?'Spotify':'YouTube'}.`,c.on==='spotify'?'https://open.spotify.com/search/'+encodeURIComponent(c.q):'https://www.youtube.com/results?search_query='+encodeURIComponent(c.q));break;
+  case 'play':{const tq=c.q.split(' ').map((w,i)=>i&&/^(by|and|the|of|on|in|a|an|feat|ft|to|for)$/.test(w)?w:w.charAt(0).toUpperCase()+w.slice(1)).join(' ');openNow(you,`Playing ${tq}${c.on==='spotify'?' on Spotify':''}.`,c.on==='spotify'?'https://open.spotify.com/search/'+encodeURIComponent(c.q):ytTop(c.q));break}
   case 'open':{const u=APPS[c.app],android=/Android/i.test(navigator.userAgent);openNow(you,`Opening ${c.app[0].toUpperCase()+c.app.slice(1)}.`,u[0]);break}
   case 'timer':startTimer(you,c.n,c.unit);break;
   case 'time':say(you,`It's ${new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}.`);break;
