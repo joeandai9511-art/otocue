@@ -303,6 +303,14 @@ async function ytOembed(id){try{const r=await tfetch('https://www.youtube.com/oe
 async function ytGemini(q){if(!S.key)throw new Error('no key');const {url,init}=buildRequest([{text:`Find the official YouTube video for: "${q}". Reply with ONLY the 11-character YouTube video ID, nothing else.`}],'You find YouTube video IDs using Google Search. Output only the ID.',undefined,[],true);
  const r=await tfetch(url,9000,init);if(!r.ok)throw new Error('gemini '+r.status);const j=await r.json(),t=(j.candidates?.[0]?.content?.parts||[]).filter(x=>!x.thought).map(x=>x.text||'').join(' ');
  const ids=[...new Set([...(t.match(/(?:v=|youtu\.be\/|^|\s)([\w-]{11})(?=\b|$)/g)||[])].map(x=>x.slice(-11)))];for(const id of ids)if(await ytOembed(id))return{id,src:'gemini+oembed'};throw new Error('gemini: no valid id')}
+// alarm songs: several embeddable candidates (oEmbed 200 = embedding allowed), best match first
+async function ytCandidates(q){const e=encodeURIComponent(q.replace(/\s+by\s+/i,' '));let items=[];
+ try{items=await Promise.any(YT_SRC.map(async([name,u,k])=>{const r=await tfetch(u.replace('%s',e),7000);if(!r.ok)throw 0;const j=await r.json();
+  const it=k==='p'?(j.items||[]).filter(x=>/watch\?v=/.test(x.url||'')).map(x=>({id:x.url.split('v=')[1],title:x.title,up:x.uploaderName,ver:x.uploaderVerified})):(Array.isArray(j)?j:[]).filter(x=>x.videoId).map(x=>({id:x.videoId,title:x.title,up:x.author,ver:x.authorVerified}));if(!it.length)throw 0;return it}))}catch(_){}
+ const ranked=[];let pool=items.slice(0,12);while(pool.length&&ranked.length<6){const b=ytPick(pool,q);ranked.push(b);pool=pool.filter(x=>x!==b)}
+ if(!ranked.length){try{const g=await ytGemini(q);ranked.push({id:g.id,title:q})}catch(_){}}
+ const ok=[];for(const c of ranked){if(c&&/^[\w-]{11}$/.test(c.id)&&await ytOembed(c.id))ok.push({id:c.id,title:c.title});if(ok.length>=4)break}return ok}
+let ytApi=null;function loadYT(){if(ytApi)return ytApi;ytApi=new Promise((res,rej)=>{if(window.YT&&YT.Player)return res(YT);const prev=window.onYouTubeIframeAPIReady;window.onYouTubeIframeAPIReady=()=>{prev&&prev();res(YT)};const sc=document.createElement('script');sc.src='https://www.youtube.com/iframe_api';sc.onerror=()=>{ytApi=null;rej(new Error('yt api'))};document.head.appendChild(sc);setTimeout(()=>rej(new Error('yt api timeout')),10000)});return ytApi}
 function logPlay(src,q,extra){const v=`${src} · “${q}” · ${new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}${extra?' · '+extra:''}`;localStorage.setItem('otocue_playsrc',v);console.info('[OtoCue] play source:',v)}
 async function ytTop(q){const e=encodeURIComponent(q.replace(/\s+by\s+/i,' '));let why='';
  const work=(async()=>{try{return await ytInstances(e,q)}catch(x){why=x.message}try{return await ytGemini(q)}catch(x){why+=(why?'; ':'')+x.message}return null})();
@@ -460,7 +468,8 @@ function parseAlarm(raw){const R=parseRepeat(raw.trim().replace(/[.?!]+$/,'')),t
  if(rest)when=parseWhen(rest);
  if(rest&&!when)return{k:'alarm',bad:rest,song};
  return{k:'alarm',when,song,rule:R.rule,label:R.label}}
-function add(you,when,song,text,rule,label,msg){if(rule&&/BYDAY=/.test(rule)){const ok=d=>rule.split('BYDAY=')[1].split(',').includes(['SU','MO','TU','WE','TH','FR','SA'][d.getDay()]);const d=new Date(when);while(!ok(d))d.setDate(d.getDate()+1);when=d.getTime()}const a=load();a.push({id:Date.now()+''+Math.random().toString(36).slice(2,6),t:when,song,text,rule,label});saveA(a);
+function add(you,when,song,text,rule,label,msg){if(rule&&/BYDAY=/.test(rule)){const ok=d=>rule.split('BYDAY=')[1].split(',').includes(['SU','MO','TU','WE','TH','FR','SA'][d.getDay()]);const d=new Date(when);while(!ok(d))d.setDate(d.getDate()+1);when=d.getTime()}const aid=Date.now()+''+Math.random().toString(36).slice(2,6),a=load();a.push({id:aid,t:when,song,text,rule,label});saveA(a);
+ if(song){unlock();loadYT().catch(()=>{});ytCandidates(song).then(v=>{const b=load(),x=b.find(y=>y.id===aid);if(x){x.vids=v;saveA(b)}console.info('[OtoCue] alarm song candidates:',song,v.map(c=>c.id+' '+c.title).join(' | ')||'none')})}
  const at=(label?fmtT(when).replace(' tomorrow',''):fmtT(when))+(label?' '+label:''),tail='';
  say(you,msg?msg:text?`Reminder set for ${at}.${tail}`:`Alarm set for ${at}${song?' with '+song:''}.${tail}`);
  savePhone(text?'reminder':'alarm',{when,text,song,rule})}
@@ -483,15 +492,30 @@ async function lock(){const has=load().length>0||ringing||wakeOn;try{if(has&&!wl
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)lock()});
 const unlock=()=>{try{ac=ac||new(window.AudioContext||window.webkitAudioContext)();ac.resume()}catch(_){}};document.addEventListener('pointerdown',unlock,{passive:true});
 function beep(){if(!ac)unlock();if(!ac)return;const t=ac.currentTime;for(let i=0;i<3;i++){const o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.value=880;g.gain.setValueAtTime(.0001,t+i*.25);g.gain.exponentialRampToValueAtTime(.6,t+i*.25+.02);g.gain.exponentialRampToValueAtTime(.0001,t+i*.25+.2);o.connect(g).connect(ac.destination);o.start(t+i*.25);o.stop(t+i*.25+.22)}}
-function stopRing(){clearInterval(beepT);beepT=null;try{navigator.vibrate&&navigator.vibrate(0)}catch(_){}const c=$('#alarmCard');if(c)c.remove();ringing=null;lock()}
+function stopRing(){clearInterval(beepT);beepT=null;songOn=false;try{songPlayer&&songPlayer.destroy()}catch(_){}songPlayer=null;try{navigator.vibrate&&navigator.vibrate(0)}catch(_){}const c=$('#alarmCard');if(c)c.remove();ringing=null;lock()}
+let songOn=false,songPlayer=null;
+// play the alarm song: try cached embeddable candidates in order (YouTube IFrame API, onError -> next); beeps continue until the song is audibly playing
+async function playAlarmSong(x){window.OtoCue.alarmSong=null;const msg=t=>{const m=document.getElementById('alarmSongMsg');if(m)m.textContent=t};let vids=x.vids||[];
+ if(!vids.length){try{vids=await ytCandidates(x.song)}catch(_){}}
+ if(!vids.length){msg(`Couldn't load “${x.song}” here. Tap Play below.`);return}
+ const pl=document.getElementById('alarmPlay');if(pl)pl.href='https://www.youtube.com/watch?v='+vids[0].id;
+ let YTx;try{YTx=await loadYT()}catch(_){msg(`Couldn't load the player. Tap Play ${x.song}.`);return}
+ let i=0;const tryNext=()=>{if(!ringing)return;if(i>=vids.length){msg(`“${x.song}” won't play inside OtoCue. The alarm tone keeps ringing. Tap Play below.`);try{songPlayer&&songPlayer.destroy()}catch(_){}return}const v=vids[i++],my=i;if(i>1)msg(`Still trying “${x.song}”… (alarm tone keeps ringing) or tap Play below.`);
+  try{songPlayer&&songPlayer.destroy()}catch(_){}const host=document.getElementById('alarmYT');if(!host)return;host.innerHTML='<div id="alarmYTp"></div>';
+  songPlayer=new YTx.Player('alarmYTp',{videoId:v.id,width:'100%',height:'180',playerVars:{autoplay:1,playsinline:1,mute:1,rel:0},
+   events:{onReady:e=>{try{e.target.playVideo()}catch(_){}},
+    onStateChange:e=>{if(e.data===1){try{e.target.unMute();e.target.setVolume(100)}catch(_){}setTimeout(()=>{let muted=true;try{muted=e.target.isMuted()}catch(_){}songOn=!muted;msg(muted?`🎵 ${v.title} is playing muted. Tap the video to unmute.`:`🎵 Playing ${v.title}`);window.OtoCue.alarmSong={id:v.id,muted}},800)}},
+    onError:e=>{console.info('[OtoCue] alarm song candidate failed',v.id,e.data);if(i===my)tryNext()}}});
+  setTimeout(()=>{let st=-9;try{st=songPlayer.getPlayerState()}catch(_){}if(ringing&&i===my&&!songOn&&st!==1)tryNext()},8000)};
+ tryNext()}
 function fire(x){if(ringing)return;ringing=x;speechSynthesis&&hush();
  const q=x.song?encodeURIComponent(x.song):'',yt='https://www.youtube.com/results?search_query='+q;
  const c=document.createElement('div');c.id='alarmCard';c.setAttribute('role','alertdialog');
- c.innerHTML=`<div class="wk">⏰</div><h2>${x.text?'Reminder':'Wake up'}</h2><p class="at"></p>${x.song?`<iframe id="alarmYT" allow="autoplay; encrypted-media" src="https://www.youtube-nocookie.com/embed?listType=search&list=${q}&autoplay=1&playsinline=1"></iframe><a class="btn" id="alarmPlay" href="${yt}" target="_blank" rel="noopener">▶ Play song</a>`:''}<div class="row"><button class="btn2" id="alarmSnooze">😴 Snooze 5 min</button><button class="btn" id="alarmStop">⏹ Stop</button></div>`;
+ c.innerHTML=`<div class="wk">⏰</div><h2>${x.text?'Reminder':'Wake up'}</h2><p class="at"></p>${x.song?`<div id="alarmYT"></div><p class="hint" id="alarmSongMsg">🎵 Loading ${x.song.replace(/[<>&]/g,'')}…</p><a class="btn" id="alarmPlay" href="${yt}" target="_blank" rel="noopener">▶ Play ${x.song.replace(/[<>&]/g,'')}</a>`:''}<div class="row"><button class="btn2" id="alarmSnooze">😴 Snooze 5 min</button><button class="btn" id="alarmStop">⏹ Stop</button></div>`;
  c.querySelector('.at').textContent=x.text?x.text:fmt(x.t)+(x.song?' · '+x.song:'');document.body.appendChild(c);
- let n=0;beep();if(x.text)setTimeout(()=>speak('Reminder: '+x.text),900);beepT=setInterval(()=>{n++;if(x.text?n%8===0:(!x.song||n<6))beep();try{navigator.vibrate&&navigator.vibrate([500,300,500])}catch(_){}},1200);
+ let n=0;beep();if(x.text)setTimeout(()=>speak('Reminder: '+x.text),900);if(x.song)playAlarmSong(x);beepT=setInterval(()=>{n++;if(x.text?n%8===0:!songOn)beep();try{navigator.vibrate&&navigator.vibrate([500,300,500])}catch(_){}},1200);
  $('#alarmStop').onclick=()=>{stopRing();status('Alarm stopped.')};
- $('#alarmSnooze').onclick=()=>{const t=Date.now()+300e3;stopRing();const a=load();a.push({id:'s'+t,t,song:x.song});saveA(a);status('Snoozed until '+fmt(t)+'.')}}
+ $('#alarmSnooze').onclick=()=>{const t=Date.now()+300e3;stopRing();const a=load();a.push({id:'s'+t,t,song:x.song,vids:x.vids});saveA(a);status('Snoozed until '+fmt(t)+'.')}}
 setInterval(()=>{const a=load(),now=Date.now(),due=a.filter(x=>x.t<=now);if(due.length){const keep=a.filter(x=>x.t>now);due.filter(x=>x.rule).forEach(x=>{let t=x.t;while(t<=now)t=nextRep(t,x.rule);keep.push({...x,t})});saveA(keep);fire(due[0])}else if(a.some(x=>x.t-now<120e3))render()},1000);
 render();lock();
 Object.assign(window.OtoCue,{parseAlarm,parseWhen,stopAlarm:stopRing,addAlarm:add,lock,fireAlarm:fire,loadAlarms:load,saveAlarms:saveA,ringing:()=>ringing,fmtTime:fmt});
