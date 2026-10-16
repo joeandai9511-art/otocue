@@ -2,7 +2,7 @@
 <title>OtoCue</title><meta name="theme-color" content="#07040f"><link rel="manifest" href="manifest.json"><link rel="icon" href="icon.svg"><link rel="apple-touch-icon" href="icon-192.png"><meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="stylesheet" href="styles.css"></head><body>
 <div class="bg" aria-hidden="true"><i></i><i></i><i></i></div>
-<header><h1><span>OtoCue</span></h1><button class="ib" id="setBtn" aria-label="Settings">⚙️</button></header>
+<header><h1><span>OtoCue</span></h1><span id="wakeBadge" class="badge">👂 Hey Cue on</span><span id="offBadge" class="badge">📴 Offline</span><button class="ib" id="setBtn" aria-label="Settings">⚙️</button></header>
 <p id="greet" class="greet">Hello, J</p>
 <div class="tabs"><button data-t="assist" class="on">🎧 Assist</button><button data-t="translate">🌐 Translate</button><button data-t="photo">📷 Photo</button></div>
 <div id="status" aria-live="polite"></div>
@@ -22,12 +22,16 @@
   <button class="chip c3" id="contactsBtn"><b>👥</b>Share Contacts</button>
   <button class="chip c4" id="replay"><b>🔊</b>Replay</button>
  </div>
- <div class="card glass sw"><div><b>“Hey Cue” wake word</b><div class="hint" style="text-align:left">Only works while the app is open &amp; screen on (browser limit). Best in Chrome/Android.</div></div><input type="checkbox" id="wake"></div>
+ <div class="card glass sw"><div><b>“Hey Cue” wake word</b><div class="hint" style="text-align:left">Only works while the app is open &amp; screen on (browser limit). Best in Chrome/Android.</div></div><input type="checkbox" id="wake" aria-label="Hey Cue wake word"></div>
+ <div class="card glass sw"><div><b>🎧 Earbud button = Ask</b><div class="hint" style="text-align:left">Press play/pause on your earbuds to start Ask. Plays silent audio while on; may not work on every phone.</div></div><input type="checkbox" id="earbud" aria-label="Earbud button = Ask"></div>
 </section>
 <section class="panel" id="translate"><div class="card glass">
  <label>Translate into</label><select id="lang"></select>
  <button class="btn" id="trBtn" style="width:100%;margin-top:12px">🎙 Listen &amp; Translate</button>
  <p class="hint">Speak in any language; translation is spoken in your earbuds.</p></div>
+ <div class="card glass"><b>🔁 Conversation mode</b><div class="hint" style="text-align:left">Two people take turns; OtoCue detects which language is spoken and speaks the translation in the other.</div>
+ <div class="row"><select id="convA"></select><select id="convB"></select></div>
+ <button class="btn" id="convBtn" style="width:100%">🔁 Start conversation</button><div id="convLog" class="hint" style="text-align:left"></div></div>
 </section>
 <section class="panel" id="photo"><div class="card glass">
  <label>Photo</label><input type="file" id="pfile" accept="image/*" capture="environment"><img id="prev" alt="">
@@ -49,6 +53,9 @@
 <dialog id="dlg"><h2>Settings</h2>
  <ol><li>Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> and sign in with Google.</li><li>Tap <b>Create API key</b> and copy it (free tier).</li><li>Paste it below and tap Save.</li></ol>
  <label>Gemini API key (stored only on this device)</label><input id="key" type="password" autocomplete="off" placeholder="AIza...">
+ <label>Contacts (saved on this device)</label><div id="cList" class="mlist"></div>
+ <div class="row"><input id="cName" placeholder="Name"><input id="cTel" type="tel" inputmode="tel" placeholder="Number"></div>
+ <div class="row"><input id="cEmail" type="email" placeholder="Email (optional)"><button class="btn2" id="cAdd">➕ Add contact</button></div>
  <label>Model</label><input id="model">
  <label>Voice</label><select id="voice"></select>
  <label>Speech rate</label><input id="rate" type="range" min="0.6" max="1.6" step="0.1">
