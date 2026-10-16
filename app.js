@@ -216,9 +216,20 @@ $('#mLang').value=msgLang();$('#mLang').onchange=e=>localStorage.setItem('otocue
 function runMsgCommand(t){t=(t||'').trim().replace(/[.!?]+$/,'');const r=t.replace(/^(?:please\s+)?(?:send\s+(?:a\s+)?(?:text|message|sms)\s+(?:to\s+)?|text\s+|message\s+|tell\s+)/i,'').replace(/^([^,]{1,30}),\s*/,'$1 ');
  const isCall=/^(?:call|phone|dial|ring)\s/i.test(r)&&!/,/.test(t);D.close();return localCmd(isCall?r:'text '+r)}
 // Ask in the modal: same start path as the main Ask (listen → listenSR → recognition.start), called synchronously inside the tap
+// voice controls inside the message screen (never become message text)
+function msgVoice(t){const l=(t||'').toLowerCase().trim().replace(/[.!?]+$/,'').replace(/^(?:please|ok|okay)\s+/,'');const mt=$('#mText'),st=x=>{$('#mTo').textContent=x;say(null,x)};
+ if(/^(?:(?:cancel|stop|turn off|disable|end|no more)\s+(?:the\s+)?translat\w*|no translat\w*|don'?t translate(?: it)?|(?:send it |keep it |just )?in english|english(?: only)?|translate off|translation off)$/.test(l)){
+  $('#mLang').value='';localStorage.setItem('otocue_msglang','');if(mt.dataset.orig&&mt.value===mt.dataset.tr)mt.value=mt.dataset.orig;delete mt.dataset.tr;st('Translate off. Original message restored.');return true}
+ let m=l.match(/^(?:translate|switch|change)\s+(?:it\s+|this\s+|that\s+|the message\s+)?(?:to|in|into)\s+([a-z]+)$|^(?:send it |say it )?in\s+([a-z]+)$/);
+ if(m){const lg=(m[1]||m[2]);const opt=[...$('#mLang').options].find(o=>o.value.toLowerCase()===lg);if(opt){if(mt.dataset.orig&&mt.value===mt.dataset.tr)mt.value=mt.dataset.orig;delete mt.dataset.tr;$('#mLang').value=opt.value;localStorage.setItem('otocue_msglang',opt.value);st(`Translate set to ${opt.value}.`);return true}
+  st(`Sorry, I can't translate to ${lg} yet.`);return true}
+ if(/^(?:cancel|cancel (?:the |this )?(?:message|text)|never ?mind|close(?: it)?|forget it)$/.test(l)){D.close();say(null,'Message canceled.');return true}
+ if(/^(?:send(?: it| that| the message| now| it now)?|go ahead and send(?: it)?)$/.test(l)){$('#mSend').click();return true}
+ return false}
+window.OtoCue.msgVoice=msgVoice;
 $('#mAsk').onclick=()=>{const b=$('#mAsk');if(b.classList.contains('rec')){stopFn&&stopFn();return}
  pauseWake();try{curRec&&curRec.abort()}catch(_){}hush();const lbl='🎙 Ask — say “text Pops I’m on my way”';b.classList.add('rec');b.textContent='🎙 Listening… speak now (tap to stop)';$('#mTo').textContent='Listening…';busy=true;
- listen({ms:SR?0:7000}).then(async h=>{busy=false;b.classList.remove('rec');b.textContent=lbl;const t=((h&&h.text)||'').trim();if(!t){$('#mTo').textContent='Didn\'t catch that. Tap Ask and try again.';return}$('#mTo').textContent='Heard: '+t;await runMsgCommand(t)})
+ listen({ms:SR?0:7000}).then(async h=>{busy=false;b.classList.remove('rec');b.textContent=lbl;const t=((h&&h.text)||'').trim();if(!t){$('#mTo').textContent='Didn\'t catch that. Tap Ask and try again.';return}$('#mTo').textContent='Heard: '+t;if(msgVoice(t))return;await runMsgCommand(t)})
   .catch(e=>{busy=false;b.classList.remove('rec');b.textContent=lbl;$('#mTo').textContent=e.message||'Mic error'}).finally(()=>{if(wakeOn)setTimeout(startWake,500)})};
 $('#mNum').oninput=e=>sel(e.target.value.trim()||null);
 $('#mPick').onclick=async()=>{if(!('contacts' in navigator&&'select' in navigator.contacts)){$('#mTo').textContent='Phone picker needs Chrome on Android — type the number instead.';$('#mNum').focus();return}
@@ -228,7 +239,7 @@ $('#mMic').onclick=async()=>{if(busy)return;const b=$('#mMic');b.textContent='�
 $('#mSend').onclick=async()=>{const n=(to||'').replace(/[^+\d]/g,'');let t=$('#mText').value.trim();
  if(/^(?:text|message|tell|send\s+(?:a\s+)?(?:text|message))\s+\S/i.test(t)&&(!n||parseCmd(t)&&parseCmd(t).p)){await runMsgCommand(t);return}
  if(!n){$('#mTo').textContent='Choose a contact or enter a number.';return}if(!t){$('#mTo').textContent='Say or type a message.';return}
- const lg=msgLang();if(lg&&$('#mText').dataset.tr!==t){$('#mTo').textContent=`Translating to ${lg}…`;const r=await translateMsg(t,lg);if(r.ok){t=r.t;$('#mText').value=t;$('#mText').dataset.tr=t;$('#mTo').textContent=`Translated to ${lg}. Sending…`}else $('#mTo').textContent=`Couldn't translate, sending the original.`;await new Promise(r=>setTimeout(r,900))}
+ const lg=msgLang();if(lg&&$('#mText').dataset.tr!==t){$('#mText').dataset.orig=t;$('#mTo').textContent=`Translating to ${lg}…`;const r=await translateMsg(t,lg);if(r.ok){t=r.t;$('#mText').value=t;$('#mText').dataset.tr=t;$('#mTo').textContent=`Translated to ${lg}. Sending…`}else $('#mTo').textContent=`Couldn't translate, sending the original.`;await new Promise(r=>setTimeout(r,900))}
  buzz([10,30,10]);D.close();window.OtoCue.lastUrl=smsUrl(n,t);location.href=smsUrl(n,t)};
 })();
 
@@ -275,7 +286,7 @@ async function translateMsg(t,lang){const L=TLANG[(lang||'').toLowerCase()];if(!
  return{t,ok:false}}
 async function textTo(you,p,msg,lang){if(!msg){await speakWait('What should I say?');try{status('Listening… say your message');msg=((await listen({ms:SR?0:7000})).text||'').trim()}catch(_){}status('');
   if(!msg){const t=prompt(`What should I text ${p.name}?`);msg=(t||'').trim()}if(!msg){say(you,'No message, so I didn\'t text.');return}}
- lang=lang||msgLang();let note='';if(lang){status(`Translating to ${lang}…`);const r=await translateMsg(msg,lang);status('');if(r.ok)msg=r.t;else note=` (Couldn't translate to ${lang}, sending the original.)`;const mt=document.getElementById('mText');if(mt)mt.value=msg}
+ lang=lang||msgLang();let note='';const orig=msg;if(lang){status(`Translating to ${lang}…`);const r=await translateMsg(msg,lang);status('');if(r.ok)msg=r.t;else note=` (Couldn't translate to ${lang}, sending the original.)`;const mt=document.getElementById('mText');if(mt){mt.value=msg;mt.dataset.orig=orig;if(r.ok)mt.dataset.tr=msg;else delete mt.dataset.tr}}
  await confirmRun(you,`Texting ${p.name}${lang&&!note?' in '+lang:''}: “${msg}”.${note}`,smsUrl(p.tel,msg))}
 function tzTime(tz){return new Date().toLocaleTimeString('en-US',{timeZone:tz,hour:'numeric',minute:'2-digit'})}
 function say(you,t){status('');show(you,t)}
