@@ -110,7 +110,7 @@ async function run(label,fn){ if(busy) return; busy=true; $('#ask').classList.ad
 async function doAsk(pre){ await run('ask',async()=>{
  let heard; if(pre) heard={text:pre}; else {status('Listening… ask your question');hush();heard=await listen({ms:SR?0:7000,fallback:true});}
  if(!heard.audio&&!heard.text){status('Didn\'t catch that.');return}
- {const bm=document.getElementById('buyMaps');if(bm)bm.remove()}
+ {const bm=document.getElementById('buyMaps');if(bm)bm.remove();const pc=document.getElementById('phoneCard');if(pc)pc.remove()}
  if(heard.text&&await localCmd(heard.text)) return;
  if(heard.text)lastQ=heard.text; status('Thinking…'); const q=heard.audio?partsFrom(heard,'Answer the question asked in this audio.'):[{text:heard.text}]; const a=await gemini(q,SYS,undefined,HIST.slice(-12));
  HIST.push({role:'user',parts:[{text:heard.text||'(voice question)'}]},{role:'model',parts:[{text:a}]}); while(HIST.length>12) HIST.shift();
@@ -349,10 +349,10 @@ function phonePlan(kind,o){const title=kind==='timer'?`⏱ ${o.label} timer`:kin
  const g=gcalUrl(title,start,mins,o.rule,'Reminder from OtoCue'),ics=icsUrl(title,start,mins,o.rule);let auto;
  if(kind==='reminder')auto=g;else if(isAndroid())auto=kind==='timer'?timerIntent(o.sec,title,g):alarmIntent(start,title,g);else auto=g;
  return{auto,g,ics,title,clock:kind==='timer'?timerIntent(o.sec,title,g):alarmIntent(start,title,g)}}
-function phoneCard(p){let c=document.getElementById('phoneCard');if(!c){c=document.createElement('div');c.id='phoneCard';c.className='card glass calcard';$('#timers').after(c)}
- c.innerHTML='<b></b>'+(isAndroid()?'<a class="btn" id="pcClock">⏰ Save in Clock app</a>':'')+'<a class="btn2" id="pcG" target="_blank" rel="noopener">📅 Google Calendar</a><a class="btn2" id="pcIcs">⬇ Calendar file (.ics)</a><button class="btn2" id="pcX" style="width:100%;margin-top:8px">✕ Close</button>';
- c.querySelector('b').textContent='Save to your phone: '+p.title;if(isAndroid())c.querySelector('#pcClock').href=p.clock;c.querySelector('#pcG').href=p.g;const a=c.querySelector('#pcIcs');a.href=p.ics;a.download='otocue-reminder.ics';c.querySelector('#pcX').onclick=()=>c.remove()}
-function savePhone(kind,o){const p=phonePlan(kind,o);phoneCard(p);window.OtoCue.lastPhone=p;openNow(null,'',p.auto);return p}
+function phoneCard(p){let c=document.getElementById('phoneCard');if(!c){c=document.createElement('div');c.id='phoneCard';c.className='savemini';$('#out').after(c)}
+ c.innerHTML='<span></span>'+(isAndroid()?'<a id="pcClock">⏰ Clock</a>':'')+'<a id="pcG" target="_blank" rel="noopener">📅 Calendar</a><a id="pcIcs">⬇ .ics</a><button id="pcX" aria-label="Close">✕</button>';
+ c.querySelector('span').textContent='Optional, save to phone:';if(isAndroid())c.querySelector('#pcClock').href=p.clock;c.querySelector('#pcG').href=p.g;const a=c.querySelector('#pcIcs');a.href=p.ics;a.download='otocue-reminder.ics';c.querySelector('#pcX').onclick=()=>c.remove()}
+function savePhone(kind,o){const p=phonePlan(kind,o);phoneCard(p);window.OtoCue.lastPhone=p;return p} // never navigates: save buttons are tap-only
 function openNow(you,msg,url){const short=msg.length<=170;
  if(you!==null){if(short)say(you,msg);else{status('');$('#you').textContent=you;$('#out').textContent=msg;lastAnswer=msg;window._speechDone=Promise.resolve()}}
  const fb=u=>{let b=$('#tapOpen');if(!b){b=document.createElement('a');b.id='tapOpen';b.className='btn';b.target='_blank';b.rel='noopener';$('#timers').before(b)}b.href=u;b.textContent='▶ Tap to '+(/^tel:/.test(u)?'call':/^(sms|mailto):/.test(u)?'send':/Playing/.test(msg)?'play':'open');b.onclick=()=>setTimeout(()=>b.remove(),300);b.hidden=false;window.OtoCue.fallback=true};
@@ -460,8 +460,8 @@ function parseAlarm(raw){const R=parseRepeat(raw.trim().replace(/[.?!]+$/,'')),t
  if(rest&&!when)return{k:'alarm',bad:rest,song};
  return{k:'alarm',when,song,rule:R.rule,label:R.label}}
 function add(you,when,song,text,rule,label,msg){if(rule&&/BYDAY=/.test(rule)){const ok=d=>rule.split('BYDAY=')[1].split(',').includes(['SU','MO','TU','WE','TH','FR','SA'][d.getDay()]);const d=new Date(when);while(!ok(d))d.setDate(d.getDate()+1);when=d.getTime()}const a=load();a.push({id:Date.now()+''+Math.random().toString(36).slice(2,6),t:when,song,text,rule,label});saveA(a);
- const at=(label?fmtT(when).replace(' tomorrow',''):fmtT(when))+(label?' '+label:''),tail=' Saving it to your phone so it rings even if OtoCue is closed.';
- say(you,msg?msg+' Saved to your phone too.':text?`Reminder set for ${at}.${tail}`:`Alarm set for ${at}${song?' with '+song:''}.${tail}`);
+ const at=(label?fmtT(when).replace(' tomorrow',''):fmtT(when))+(label?' '+label:''),tail='';
+ say(you,msg?msg:text?`Reminder set for ${at}.${tail}`:`Alarm set for ${at}${song?' with '+song:''}.${tail}`);
  savePhone(text?'reminder':'alarm',{when,text,song,rule})}
 const fmtT=t=>{const d=new Date(t),tm=d.toLocaleTimeString('en-US',{hour:'numeric',minute:d.getMinutes()?'2-digit':undefined}),tom=new Date();tom.setDate(tom.getDate()+1);return d.toDateString()===tom.toDateString()&&!0?tm+' tomorrow':tm};
 function nextRep(t,rule){const d=new Date(t);do{d.setDate(d.getDate()+1)}while(/BYDAY=/.test(rule)&&!rule.split('BYDAY=')[1].split(',').includes(['SU','MO','TU','WE','TH','FR','SA'][d.getDay()]));return d.getTime()}
