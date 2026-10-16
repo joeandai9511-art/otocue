@@ -87,7 +87,7 @@ function record(ms){return new Promise(async(res,rej)=>{if(!(navigator.mediaDevi
   mr.start(1000);const stop=()=>{clearTimeout(t);if(mr.state!=='inactive')mr.stop()},t=setTimeout(stop,ms||8000);stopFn=stop;
  }catch(e){if(e&&e.name==='NotAllowedError'){micHelp();e=new Error('Microphone permission denied.');e.code='not-allowed'}rej(e)}})}
 function listenSR({ms=0,continuous=false,lang}={}){return new Promise((res,rej)=>{
- const r=new SR();curRec=r;r.lang=lang||ulang()||navigator.language||'en-US';r.interimResults=true;r.continuous=continuous;let fin='',timer,lastInt='',stopped=false,done=false;const end=Date.now()+(ms||60000);
+ const r=new SR();curRec=r;r.lang=lang||ulang()||(/^en/i.test(navigator.language)?navigator.language:'en-US');r.interimResults=true;r.continuous=continuous;let fin='',timer,lastInt='',stopped=false,done=false;const end=Date.now()+(ms||60000);
  const finish=()=>{if(done)return;done=true;clearTimeout(timer);if(curRec===r)curRec=null;res({text:(fin.trim()||lastInt.trim()),stopped})};
  r.onresult=e=>{let it='';for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript;if(e.results[i].isFinal)fin+=t+' ';else it+=t}lastInt=it;$('#you').textContent=(fin+it).trim()||'…'};
  r.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed'){done=true;clearTimeout(timer);curRec=null;micHelp();const x=new Error('Microphone permission denied.');x.code='not-allowed';return rej(x)}
@@ -112,7 +112,7 @@ async function doAsk(pre){ await run('ask',async()=>{
  if(!heard.audio&&!heard.text){status('Didn\'t catch that.');return}
  {const bm=document.getElementById('buyMaps');if(bm)bm.remove();const pc=document.getElementById('phoneCard');if(pc)pc.remove()}
  if(heard.text&&await localCmd(heard.text)) return;
- if(heard.text)lastQ=heard.text; status('Thinking…'); const q=heard.audio?partsFrom(heard,'Answer the question asked in this audio.'):[{text:heard.text}]; const a=await gemini(q,SYS,undefined,HIST.slice(-12));
+ if(heard.text)lastQ=heard.text; status('Thinking…'); const q=heard.audio?partsFrom(heard,'Answer the question asked in this audio.'):[{text:heard.text}]; let a;try{a=await gemini(q,SYS,undefined,HIST.slice(-12))}catch(e){if(heard.text&&/^(?:cancel|stop|turn|open|text|call|send|play|set|remind|translate|take|go|navigate|directions|find|order|get|show|start|close|switch|change|no|yes|in english|english)\b/i.test(normCmd(heard.text))){status('');say(heard.text,`I didn't recognize that command, and online answers are paused right now. Try saying it another way, like “open Spotify” or “cancel translate”.`);return}throw e}
  HIST.push({role:'user',parts:[{text:heard.text||'(voice question)'}]},{role:'model',parts:[{text:a}]}); while(HIST.length>12) HIST.shift();
  status(''); show(heard.text??'(voice)',a); });}
 async function doSoft(){ await run('soft',async()=>{ status('Soft Listen: listening for 30s…'); hush();
@@ -131,7 +131,7 @@ async function doPhoto(){ const f=$('#pfile').files[0]; if(!f){status('Pick or t
 function shrink(file){return new Promise((res,rej)=>{const i=new Image();i.onload=()=>{const m=1280,s=Math.min(1,m/Math.max(i.width,i.height)),c=document.createElement('canvas');c.width=i.width*s;c.height=i.height*s;c.getContext('2d').drawImage(i,0,0,c.width,c.height);URL.revokeObjectURL(i.src);res(c.toDataURL('image/jpeg',.85).split(',')[1])};i.onerror=()=>rej(new Error('Could not read image'));i.src=URL.createObjectURL(file)})}
 
 // ---- wake word
-function startWake(){ if(!wakeOn||busy||!SR||wakeRec) return; if(speaking()){clearTimeout(startWake._t);startWake._t=setTimeout(startWake,Math.max(300,speakUntil-Date.now()+300));return} const r=new SR(); wakeRec=r; r.continuous=true; r.interimResults=true; r.lang=ulang()||navigator.language||'en-US';
+function startWake(){ if(!wakeOn||busy||!SR||wakeRec) return; if(speaking()){clearTimeout(startWake._t);startWake._t=setTimeout(startWake,Math.max(300,speakUntil-Date.now()+300));return} const r=new SR(); wakeRec=r; r.continuous=true; r.interimResults=true; r.lang=ulang()||(/^en/i.test(navigator.language)?navigator.language:'en-US');
  r.onresult=e=>{wakeFails=0;for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript.toLowerCase();
   const m=t.match(/\b(hey|hi|ok|okay)[ ,]*(cue|queue|q|kyu|cute|cu)\b(.*)/);
   if(m&&e.results[i].isFinal){pauseWake();const rest=m[3].trim();rest.split(' ').length>2?doAsk(rest):doAsk();return}}};
@@ -217,11 +217,10 @@ function runMsgCommand(t){t=(t||'').trim().replace(/[.!?]+$/,'');const r=t.repla
  const isCall=/^(?:call|phone|dial|ring)\s/i.test(r)&&!/,/.test(t);D.close();return localCmd(isCall?r:'text '+r)}
 // Ask in the modal: same start path as the main Ask (listen → listenSR → recognition.start), called synchronously inside the tap
 // voice controls inside the message screen (never become message text)
-function msgVoice(t){const l=(t||'').toLowerCase().trim().replace(/[.!?]+$/,'').replace(/^(?:please|ok|okay)\s+/,'');const mt=$('#mText'),st=x=>{$('#mTo').textContent=x;say(null,x)};
- if(/^(?:(?:cancel|stop|turn off|disable|end|no more)\s+(?:the\s+)?translat\w*|no translat\w*|don'?t translate(?: it)?|(?:send it |keep it |just )?in english|english(?: only)?|translate off|translation off)$/.test(l)){
+function msgVoice(t){const l=normCmd(t),tc=trCmd(t);const mt=$('#mText'),st=x=>{$('#mTo').textContent=x;say(null,x)};
+ if(tc&&tc.off){
   $('#mLang').value='';localStorage.setItem('otocue_msglang','');if(mt.dataset.orig&&mt.value===mt.dataset.tr)mt.value=mt.dataset.orig;delete mt.dataset.tr;st('Translate off. Original message restored.');return true}
- let m=l.match(/^(?:translate|switch|change)\s+(?:it\s+|this\s+|that\s+|the message\s+)?(?:to|in|into)\s+([a-z]+)$|^(?:send it |say it )?in\s+([a-z]+)$/);
- if(m){const lg=(m[1]||m[2]);const opt=[...$('#mLang').options].find(o=>o.value.toLowerCase()===lg);if(opt){if(mt.dataset.orig&&mt.value===mt.dataset.tr)mt.value=mt.dataset.orig;delete mt.dataset.tr;$('#mLang').value=opt.value;localStorage.setItem('otocue_msglang',opt.value);st(`Translate set to ${opt.value}.`);return true}
+ if(tc&&tc.lang){const lg=tc.lang;const opt=[...$('#mLang').options].find(o=>o.value.toLowerCase()===lg);if(opt){if(mt.dataset.orig&&mt.value===mt.dataset.tr)mt.value=mt.dataset.orig;delete mt.dataset.tr;$('#mLang').value=opt.value;localStorage.setItem('otocue_msglang',opt.value);st(`Translate set to ${opt.value}.`);return true}
   st(`Sorry, I can't translate to ${lg} yet.`);return true}
  if(/^(?:cancel|cancel (?:the |this )?(?:message|text)|never ?mind|close(?: it)?|forget it)$/.test(l)){D.close();say(null,'Message canceled.');return true}
  if(/^(?:send(?: it| that| the message| now| it now)?|go ahead and send(?: it)?)$/.test(l)){$('#mSend').click();return true}
@@ -277,6 +276,14 @@ async function resolveOrPick(you,who,kind,then){const p=findContact(who);if(p&&p
  b.onclick=async e=>{e.preventDefault();b.remove();try{const q=await pickFor(who);if(q)then(q)}catch(err){status('Contacts: '+err.message)}}}
 function speakWait(t){show(null,t);return afterSpeech()}
 var TLANG={spanish:['es'],portuguese:['pt'],french:['fr'],chinese:['zh-CN'],mandarin:['zh-CN'],vietnamese:['vi'],tagalog:['tl','fil-PH'],filipino:['tl','fil-PH'],korean:['ko'],arabic:['ar'],hindi:['hi']};
+// translate on/off/switch: top-level, local, fuzzy, works in every state (EN + common ES recognitions)
+function normCmd(t){return(t||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[“”"¿¡]/g,'').replace(/[.!?,;:]+/g,' ').replace(/\s+/g,' ').trim().replace(/^(?:hey cue |ok cue |okay |ok |please |oh |um |uh )+/,'').replace(/(?: please| now| thanks| thank you)+$/,'')}
+const TR_W='(?:translat\\w*|traduc\\w*|transl\\w*|trans late\\w*|translator)';
+function trCmd(t){const l=normCmd(t);if(!l)return null;
+ if(new RegExp('^(?:(?:cancel|cancels|canceled|stop|end|disable|kill|remove|quit|close|exit|turn off|switch off|shut off|no|cancelar|quitar|apagar|desactivar|sin|no mas)\\s+(?:the |a |la |el |my |this |that )?'+TR_W+'(?:\\s+(?:off|mode|on|please))?|'+TR_W+'\\s+off|turn\\s+(?:the\\s+)?'+TR_W+'\\s+off|(?:don\'?t|do not)\\s+translate(?:\\s+(?:it|that|this))?|(?:send it |say it |just |keep it |speak |leave it )?(?:in )?english(?: only| instead)?|(?:en )?ingles)$').test(l))return{off:true};
+ const m=l.match(new RegExp('^(?:'+TR_W+'|switch|change|set)\\s+(?:it\\s+|this\\s+|that\\s+|the message\\s+|language\\s+)?(?:to|in|into|a|al)\\s+([a-z]+)$|^(?:send it |say it )?in\\s+([a-z]+)$|^(?:turn on |start )'+TR_W+'(?:\\s+(?:to|in|into)\\s+([a-z]+))?$'));
+ if(m){const w=m[1]||m[2]||m[3]||'';const ES={espanol:'spanish',portugues:'portuguese',frances:'french',chino:'chinese',coreano:'korean',arabe:'arabic'};const k=ES[w]||w;if(!k)return{on:true};return{lang:k}}
+ return null}
 function msgLang(){return localStorage.getItem('otocue_msglang')||''}
 async function translateMsg(t,lang){const L=TLANG[(lang||'').toLowerCase()];if(!L||!t)return{t,ok:true};
  try{const r=(await geminiRaw([{text:t}],`Translate the user's text message into ${lang}. Keep the tone casual. Output only the translation.`,undefined,[],false)).trim();if(r)return{t:r,ok:true,via:'gemini'}}catch(_){}
@@ -421,16 +428,15 @@ function confirmRun(you,msg,url,meta){if(!confirmOn()){openNow(you,msg,url);retu
  const go=()=>{if(done||busy)return;status('Listening for yes / no…');busy=true;listen({ms:5000}).then(h=>{busy=false;if(done)return;pendingSay((h.text||'').trim(),true)}).catch(()=>{busy=false;if(!done)status(CFM_HINT)})};
  if('speechSynthesis' in window&&SR){afterSpeech().then(go)}else status(CFM_HINT)}
 // returns true if the utterance was consumed by the pending card
-async function pendingSay(t,auto){const P=window._pend;if(!P)return false;const l=t.toLowerCase().replace(/[.!?,]+$/,'').trim();
+async function pendingSay(t,auto){const P=window._pend;if(!P)return false;const l=normCmd(t);
  if(!l){status(CFM_HINT);return true}
  const m=P.meta;
  if(m&&m.kind==='sms'){
   const redo=async(text,lang)=>{let out=text,note='';if(lang){status(`Translating to ${lang}…`);const r=await translateMsg(text,lang);status('');if(r.ok)out=r.t;else note=` (Couldn't translate to ${lang}, sending the original.)`}
    m.orig=text;m.lang=lang;const msg=`Texting ${m.p.name}${lang&&!note?' in '+lang:''}: “${out}”.${note}`;P.set(msg,smsUrl(m.p.tel,out));show(null,msg+' Say yes, or tap Confirm.');status(CFM_HINT);return true};
-  if(/^(?:(?:cancel|stop|turn off|no)\s+(?:the\s+)?translat\w*|no translat\w*|don'?t translate(?: it)?|(?:send it |say it |just )?in english|english(?: only)?)$/.test(l))return redo(m.orig,'');
-  let x=l.match(/^(?:translate|switch|change)\s+(?:it\s+|this\s+|that\s+)?(?:to|in|into)\s+([a-z]+)$|^(?:send it |say it )?in\s+([a-z]+)$/);
-  if(x){const lg=x[1]||x[2],L=Object.keys(TLANG).find(k=>k===lg);if(L)return redo(m.orig,lg[0].toUpperCase()+lg.slice(1));say(null,`Sorry, I can't translate to ${lg} yet.`);status(CFM_HINT);return true}
-  x=t.match(/^(?:change|make)\s+(?:it|that|the message)\s+(?:to|say)\s+(.+)$|^(?:instead\s+)?say\s+(.+)$|^(?:change|replace)\s+(?:it|that|the message)\s+with\s+(.+)$/i);
+  const tc=trCmd(t);if(tc&&tc.off){localStorage.setItem('otocue_msglang','');const ml=document.getElementById('mLang');if(ml)ml.value='';return redo(m.orig,'')}
+  if(tc&&tc.lang){const lg=tc.lang;if(TLANG[lg]){const L=lg[0].toUpperCase()+lg.slice(1);localStorage.setItem('otocue_msglang',L);return redo(m.orig,L)}say(null,`Sorry, I can't translate to ${lg} yet.`);status(CFM_HINT);return true}
+  let x=t.match(/^(?:change|make)\s+(?:it|that|the message)\s+(?:to|say)\s+(.+)$|^(?:instead\s+)?say\s+(.+)$|^(?:change|replace)\s+(?:it|that|the message)\s+with\s+(.+)$/i);
   if(x)return redo((x[1]||x[2]||x[3]).trim().replace(/[.!?]+$/,''),m.lang)}
  if(/^(?:yes|yeah|yep|yup|sure|ok|okay|confirm|send|send it|send that|do it|go|go ahead|go ahead and send(?: it)?|call|call them|call it)$/.test(l)){P.fin(true);return true}
  if(/^(?:no|nope|cancel|cancel it|cancel that|cancel (?:the )?(?:message|text|call|email)|stop|don'?t|never ?mind|forget it)$/.test(l)){P.fin(false);return true}
@@ -787,7 +793,13 @@ function manage(raw){const l=raw.toLowerCase().trim().replace(/[.?!]+$/,'').repl
  if(/^(?:stop|turn off|dismiss)(?: it)?$/.test(l)&&O.ringing()){O.stopAlarm();say(raw,'Alarm stopped.');return true}
  return false}
 const prev=localCmd;localCmd=async t=>manage(t)||prev(t);O.manage=manage;
-{const pv=localCmd;localCmd=async t=>{if(window._pend&&await pendingSay(t))return true;return pv(t)}}
+{const pv=localCmd;localCmd=async t=>{if(window._pend&&await pendingSay(t))return true;
+ const D=document.getElementById('msgDlg');if(D&&D.open&&window.OtoCue.msgVoice&&window.OtoCue.msgVoice(t))return true;
+ const tc=trCmd(t);if(tc){const ml=document.getElementById('mLang');
+  if(tc.off){localStorage.setItem('otocue_msglang','');if(ml)ml.value='';say(t,'Translate is off.');return true}
+  if(tc.on&&!tc.lang){say(t,`Translate is ${msgLang()?'on, '+msgLang():'off'}. Say “translate to Spanish” to pick a language.`);return true}
+  if(TLANG[tc.lang]){const L=tc.lang[0].toUpperCase()+tc.lang.slice(1);localStorage.setItem('otocue_msglang',L);if(ml)ml.value=L;say(t,`Messages will be translated to ${L}.`);return true}}
+ return pv(t)}}
 })();
 
 // ---- first-run setup / edit profile
