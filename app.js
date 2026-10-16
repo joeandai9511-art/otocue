@@ -37,7 +37,7 @@ async function gemini(parts,system=SYS,model,hist){
  const t=(j.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('').trim();
  if(!t) throw new Error('No answer returned.'); return t;
 }
-const SYS='You are OtoCue, a concise AI assistant heard through an earpiece. Answer in 1-4 short spoken sentences, plain text, no markdown or lists.';
+const SYS='You are OtoCue, a concise AI assistant heard through an earpiece. Answer in 1-4 short spoken sentences, plain text, no markdown or lists. You cannot set alarms, timers, reminders, make calls, send texts or emails, or take any action on the device yourself; the app handles those only when the user uses command phrasing. Never claim you have done or set anything. If asked, say to use a command like "wake me up at 7 AM to <song>", "set an alarm for 6:30", "timer 5 minutes", "call Mom" or "text Mom that I am on my way".';
 
 function speak(text,lang){
  if(!('speechSynthesis' in window)) return; speechSynthesis.cancel();
@@ -230,7 +230,7 @@ function parseCmd(raw){const t=raw.trim().replace(/[.?!]+$/,''),l=t.toLowerCase(
  if(/^(?:what(?:'s| is)\s+)?(?:today'?s?\s+)?(?:the\s+)?date(?:\s+today)?$|^what day is (?:it|today)/.test(l))return{k:'date'};
  if(m=l.match(/^(?:search(?:\s+for)?|google|look up)\s+(.+)$/))return{k:'search',q:m[1]};
  return null}
-async function localCmd(text){const c=parseCmd(text);if(!c)return false;const you=text;
+let localCmd=async function(text){const c=parseCmd(text);if(!c)return false;const you=text;
  switch(c.k){
   case 'call':{const p=findContact(c.who),dig=c.who.replace(/[^+\d]/g,'');if(!p&&dig.length>=3){await confirmRun(you,`Calling ${c.who}.`,'tel:'+dig);break}
    if(!p||!p.tel){sayNoContact(you,c.who);break}await confirmRun(you,`Calling ${p.name}.`,'tel:'+p.tel.replace(/[^+\d]/g,''));break}
@@ -250,4 +250,57 @@ async function localCmd(text){const c=parseCmd(text);if(!c)return false;const yo
  return true}
 Object.assign(window.OtoCue,{parseCmd,findContact,localCmd});
 
-$('#typeForm').onsubmit=e=>{e.preventDefault();const v=$('#typeQ').value.trim();if(!v)return;$('#typeQ').value='';$('#you').textContent=v;doAsk(v)};
+$('#typeForm').onsubmit=e=>{e.preventDefault();const v=$('#typeQ').value.trim();if(!v)return;$('#typeQ').value='';$('#you').textContent=v;window._typed=true;doAsk(v).finally(()=>{window._typed=false})};
+
+// ---- alarms (local, no Gemini)
+(function(){
+const KEY='otocue_alarms';let pend=null,ac=null,beepT=null,ringing=null,wl=null;
+const load=()=>{try{return JSON.parse(localStorage.getItem(KEY)||'[]')}catch(_){return[]}},saveA=a=>{localStorage.setItem(KEY,JSON.stringify(a));render();lock()};
+const fmt=t=>new Date(t).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',second:(t-Date.now()<120e3)?'2-digit':undefined});
+const NW={a:1,an:1,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,fifteen:15,twenty:20,thirty:30,forty:40,'forty five':45,fifty:50,sixty:60};
+function parseWhen(s){s=s.toLowerCase().trim().replace(/[.?!]+$/,'');let m;
+ if(m=s.match(/^(?:in\s+)?(\d+|[a-z]+(?:\s[a-z]+)?)\s+(seconds?|secs?|minutes?|mins?|hours?|hrs?)(?:\s+from\s+now)?$/)){const n=+m[1]||NW[m[1]];if(!n)return null;return Date.now()+n*(/^h/.test(m[2])?3600e3:/^s/.test(m[2])?1e3:60e3)}
+ if(m=s.match(/^(?:at\s+|for\s+)?(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?(?:\s+(?:tomorrow|in the morning|tonight))?$/)){let h=+m[1],mi=+(m[2]||0);if(h>23||mi>59)return null;const ap=m[3]&&m[3][0];
+  if(ap==='p'&&h<12)h+=12;if(ap==='a'&&h===12)h=0;const d=new Date();d.setSeconds(0,0);d.setHours(h,mi);
+  if(!ap&&h<12){if(d<=Date.now())d.setHours(h+12)}if(d<=Date.now())d.setDate(d.getDate()+1);return d.getTime()}
+ return null}
+const cleanSong=s=>(s||'').trim().replace(/^(?:the song\s+)?/i,'').replace(/[.?!]+$/,'');
+function parseAlarm(raw){const t=raw.trim().replace(/[.?!]+$/,'');let m;
+ if(!(m=t.match(/^(?:please\s+)?(?:wake me(?:\s+up)?|set (?:an?\s+|my\s+)?alarm|alarm)\s*(.*)$/i)))return null;
+ let rest=m[1].trim(),song='',when=null;
+ const sm=rest.match(/\s*\b(?:to|with|playing)\s+(?!\d)(.+)$/i);if(sm){const before=rest.slice(0,sm.index).trim();const w=before?parseWhen(before.replace(/^(for|at|in)\s+/i,x=>/in/i.test(x)?'in ':'')):null;if(!before||w){song=cleanSong(sm[1]);rest=before}}
+ if(rest)when=parseWhen(rest);
+ if(rest&&!when)return{k:'alarm',bad:rest,song};
+ return{k:'alarm',when,song}}
+function add(you,when,song){const a=load();a.push({id:Date.now()+''+Math.random().toString(36).slice(2,6),t:when,song});saveA(a);
+ say(you,`Alarm set for ${fmt(when)}${song?' with '+song:''}. Keep OtoCue open with the screen on.`)}
+async function handle(text){
+ if(pend){const w=parseWhen(text.replace(/^(?:at|for)\s+/i,''));if(w){const s=pend.song;pend=null;add(text,w,s);return true}
+  if(/^(cancel|never ?mind|no)\b/i.test(text)){pend=null;say(text,'Okay, no alarm.');return true}pend=null}
+ const c=parseAlarm(text);if(!c)return false;
+ if(c.when){add(text,c.when,c.song);return true}
+ pend={song:c.song};say(text,c.bad?`Sorry, I didn't understand the time “${c.bad}”. What time should I wake you?`:'What time? Say a time like “7 AM” or “in 30 minutes”.');
+ if(!window._typed)setTimeout(()=>{if(pend&&SR&&!busy)doAsk()},2500);return true}
+const orig=localCmd;localCmd=async t=>(await handle(t))||orig(t);
+// UI
+const box=document.createElement('div');box.id='alarms';$('#timers').before(box);
+function render(){const a=load().sort((x,y)=>x.t-y.t);box.innerHTML='';a.forEach(x=>{const el=document.createElement('div');el.className='timer glass alarm';
+ el.innerHTML='<span></span><button class="btn2 acx" aria-label="Cancel alarm">✕</button>';el.firstChild.textContent=`⏰ ${fmt(x.t)}${x.song?' · '+x.song:''}`;
+ el.querySelector('button').onclick=()=>{saveA(load().filter(y=>y.id!==x.id));status('Alarm cancelled.')};box.appendChild(el)})}
+async function lock(){const has=load().length>0||ringing;try{if(has&&!wl&&'wakeLock' in navigator&&!document.hidden){wl=await navigator.wakeLock.request('screen');wl.addEventListener('release',()=>{wl=null})}else if(!has&&wl){wl.release();wl=null}}catch(_){}}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)lock()});
+const unlock=()=>{try{ac=ac||new(window.AudioContext||window.webkitAudioContext)();ac.resume()}catch(_){}};document.addEventListener('pointerdown',unlock,{passive:true});
+function beep(){if(!ac)unlock();if(!ac)return;const t=ac.currentTime;for(let i=0;i<3;i++){const o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.value=880;g.gain.setValueAtTime(.0001,t+i*.25);g.gain.exponentialRampToValueAtTime(.6,t+i*.25+.02);g.gain.exponentialRampToValueAtTime(.0001,t+i*.25+.2);o.connect(g).connect(ac.destination);o.start(t+i*.25);o.stop(t+i*.25+.22)}}
+function stopRing(){clearInterval(beepT);beepT=null;try{navigator.vibrate&&navigator.vibrate(0)}catch(_){}const c=$('#alarmCard');if(c)c.remove();ringing=null;lock()}
+function fire(x){if(ringing)return;ringing=x;speechSynthesis&&speechSynthesis.cancel();
+ const q=x.song?encodeURIComponent(x.song):'',yt='https://www.youtube.com/results?search_query='+q;
+ const c=document.createElement('div');c.id='alarmCard';c.setAttribute('role','alertdialog');
+ c.innerHTML=`<div class="wk">⏰</div><h2>Wake up</h2><p class="at"></p>${x.song?`<iframe id="alarmYT" allow="autoplay; encrypted-media" src="https://www.youtube-nocookie.com/embed?listType=search&list=${q}&autoplay=1&playsinline=1"></iframe><a class="btn" id="alarmPlay" href="${yt}" target="_blank" rel="noopener">▶ Play song</a>`:''}<div class="row"><button class="btn2" id="alarmSnooze">😴 Snooze 5 min</button><button class="btn" id="alarmStop">⏹ Stop</button></div>`;
+ c.querySelector('.at').textContent=fmt(x.t)+(x.song?' · '+x.song:'');document.body.appendChild(c);
+ let n=0;beep();beepT=setInterval(()=>{n++;if(!x.song||n<6)beep();try{navigator.vibrate&&navigator.vibrate([500,300,500])}catch(_){}},1200);
+ $('#alarmStop').onclick=()=>{stopRing();status('Alarm stopped.')};
+ $('#alarmSnooze').onclick=()=>{const t=Date.now()+300e3;stopRing();const a=load();a.push({id:'s'+t,t,song:x.song});saveA(a);status('Snoozed until '+fmt(t)+'.')}}
+setInterval(()=>{const a=load(),now=Date.now(),due=a.filter(x=>x.t<=now);if(due.length){saveA(a.filter(x=>x.t>now));fire(due[0])}else if(a.some(x=>x.t-now<120e3))render()},1000);
+render();lock();
+Object.assign(window.OtoCue,{parseAlarm,parseWhen,stopAlarm:stopRing});
+})();

@@ -64,3 +64,8 @@ dialog{background:#14100c;color:var(--tx);border:1px solid var(--bd);border-radi
 /* pause when idle/hidden */
 .paused *,.paused *::before{animation-play-state:paused!important}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+.alarm{display:flex;align-items:center;justify-content:space-between;gap:8px}.alarm .acx{flex:none;padding:6px 12px;border-radius:12px}
+#alarmCard{position:fixed;inset:0;z-index:50;background:#120b04;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center}
+#alarmCard .wk{font-size:72px}#alarmCard h2{font-size:48px;margin:0;color:var(--c);font-weight:900}#alarmCard .at{font-size:20px;color:var(--tx);margin:0}
+#alarmCard iframe{width:min(90vw,420px);aspect-ratio:16/9;border:0;border-radius:16px}#alarmCard #alarmPlay{text-decoration:none;font-size:20px;padding:16px 28px}
+#alarmCard .row{width:min(90vw,420px)}#alarmCard .row button{font-size:20px;padding:18px}
