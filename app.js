@@ -44,10 +44,10 @@ function show(you,ans,lang){ if(you!=null)$('#you').textContent=you; $('#out').t
 function listen({ms=0,continuous=false,lang}={}){
  return new Promise(async(res,rej)=>{
   if(SR){
-   const r=new SR(); curRec=r; r.lang=lang||navigator.language||'en-US'; r.interimResults=true; r.continuous=continuous; let fin='',timer;
-   r.onresult=e=>{let it='';for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript;if(e.results[i].isFinal)fin+=t+' ';else it+=t}$('#you').textContent=(fin+it).trim()||'…'};
+   const r=new SR(); curRec=r; r.lang=lang||navigator.language||'en-US'; r.interimResults=true; r.continuous=continuous; let fin='',timer,lastInt='';
+   r.onresult=e=>{let it='';for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript;if(e.results[i].isFinal)fin+=t+' ';else it+=t}lastInt=it||lastInt;$('#you').textContent=(fin+it).trim()||'…'};
    r.onerror=e=>{if(e.error!=='no-speech'&&e.error!=='aborted'){clearTimeout(timer);curRec=null;rej(new Error('Mic: '+e.error))}};
-   r.onend=()=>{ if(continuous&&curRec===r&&Date.now()<end){try{r.start()}catch(_){};return} clearTimeout(timer);curRec=null;res({text:fin.trim()})};
+   r.onend=()=>{ if(continuous&&curRec===r&&Date.now()<end){try{r.start()}catch(_){};return} clearTimeout(timer);curRec=null;res({text:(fin.trim()||lastInt.trim())})};
    const end=Date.now()+(ms||60000); if(ms) timer=setTimeout(()=>{curRec=null;r.stop()},ms);
    stopFn=()=>{const c=curRec;curRec=null;c&&c.stop()}; try{r.start()}catch(e){rej(e)}
   } else if(navigator.mediaDevices&&window.MediaRecorder){
@@ -132,7 +132,7 @@ document.addEventListener('pointerdown',e=>{if(e.target.closest('button'))buzz()
 const h=new Date().getHours();$('#greet').textContent=(h<5?'Up late':h<12?'Good morning':h<18?'Good afternoon':'Good evening')+', J';
 const stage=$('#stage');let mic=null;
 function setState(s){if(stage.dataset.state===s)return;stage.dataset.state=s;if(s==='listening')startMeter();else stopMeter()}
-async function startMeter(){try{if(!navigator.permissions||!navigator.mediaDevices||!(window.AudioContext||window.webkitAudioContext))return;
+async function startMeter(){return;try{if(!navigator.permissions||!navigator.mediaDevices||!(window.AudioContext||window.webkitAudioContext))return;
  const p=await navigator.permissions.query({name:'microphone'}).catch(()=>null);if(!p||p.state!=='granted')return;
  const st=await navigator.mediaDevices.getUserMedia({audio:true});if(stage.dataset.state!=='listening'){st.getTracks().forEach(t=>t.stop());return}
  const ac=new(window.AudioContext||window.webkitAudioContext)(),an=ac.createAnalyser();an.fftSize=256;ac.createMediaStreamSource(st).connect(an);
@@ -216,7 +216,7 @@ function parseCmd(raw){const t=raw.trim().replace(/[.?!]+$/,''),l=t.toLowerCase(
  if(m=l.match(/^(?:play)\s+(.+?)(?:\s+on\s+(spotify|youtube))?$/))return{k:'play',q:m[1],on:m[2]};
  if(m=l.match(/^open\s+(?:the\s+)?(.+?)(?:\s+app)?$/))if(APPS[m[1]])return{k:'open',app:m[1]};
  if(m=l.match(/^(?:set\s+(?:a\s+)?)?timer\s+(?:for\s+)?(\d+|[a-z]+(?:\s[a-z]+)?)\s+(minutes?|mins?|hours?|seconds?|secs?)/)||(m=l.match(/^set\s+(?:a\s+)?(\d+|[a-z]+)\s+(minutes?|hours?|seconds?)\s+timer/))){const n=+m[1]||NUMW[m[1]];if(n)return{k:'timer',n,unit:m[2].replace(/^min$|^mins$/,'minutes').replace(/^secs?$/,'seconds')}}
- if(m=l.match(/^(?:what(?:'s| is)\s+(?:the\s+)?)?(?:current\s+)?time\s+(?:is\s+it\s+)?in\s+(.+)$/))return{k:'tz',city:m[1].replace(/^the\s+/,'')};
+ if(m=l.match(/^(?:what(?:'s| is)?\s+(?:the\s+)?)?(?:current\s+)?time\s+(?:is\s+it\s+)?(?:right\s+now\s+|now\s+)?in\s+(.+?)[?.!]*$/))return{k:'tz',city:m[1].replace(/^the\s+/,'')};
  if(/^(?:what(?:'s| is)\s+(?:the\s+)?)?(?:current\s+)?time(?:\s+is\s+it)?(?:\s+now)?$|^what time is it/.test(l))return{k:'time'};
  if(/^(?:what(?:'s| is)\s+)?(?:today'?s?\s+)?(?:the\s+)?date(?:\s+today)?$|^what day is (?:it|today)/.test(l))return{k:'date'};
  if(m=l.match(/^(?:search(?:\s+for)?|google|look up)\s+(.+)$/))return{k:'search',q:m[1]};
@@ -240,3 +240,5 @@ async function localCmd(text){const c=parseCmd(text);if(!c)return false;const yo
   case 'date':say(you,`Today is ${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})}.`);break}
  return true}
 Object.assign(window.OtoCue,{parseCmd,findContact,localCmd});
+
+$('#typeForm').onsubmit=e=>{e.preventDefault();const v=$('#typeQ').value.trim();if(!v)return;$('#typeQ').value='';$('#you').textContent=v;doAsk(v)};

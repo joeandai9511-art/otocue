@@ -82,3 +82,8 @@ body{background:linear-gradient(160deg,#1a1006 0%,#2a1a08 50%,#120b04 100%) fixe
 @keyframes pulse{50%{transform:scale(1.07);box-shadow:0 0 90px var(--c),0 0 140px color-mix(in srgb,var(--p) 55%,transparent)}}
 [data-state=listening].live-audio #ask{box-shadow:0 0 calc(40px + var(--w)*120px) var(--c),0 0 120px color-mix(in srgb,var(--p) 55%,transparent)}
 [data-state=thinking] #ask::before{animation-duration:1s}
+
+.typebar{display:flex;gap:8px;margin:12px auto;max-width:520px;padding:0 14px}
+.typebar input{flex:1;padding:14px 16px;border-radius:999px;border:1px solid #d4a84a88;background:#1a1206cc;color:#fff;font-size:16px}
+.typebar button{width:50px;border-radius:50%;border:0;background:linear-gradient(135deg,#ffd76a,#b8862b);color:#1a1206;font-size:20px;font-weight:700}
+#out.ans{position:static!important;width:auto!important;height:auto!important;clip:auto!important;overflow:visible!important;margin:10px auto;max-width:520px;padding:14px 16px;border-radius:16px;background:#1a1206aa;border:1px solid #d4a84a55;color:#fff;font-size:17px;line-height:1.45;white-space:pre-wrap}
