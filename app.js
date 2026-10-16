@@ -195,6 +195,10 @@ function list(){let c=[];try{c=JSON.parse(localStorage.getItem('otocue_contacts'
 $('#msgBtn').onclick=()=>{list();sel(null);$('#mNum').value='';$('#mText').value='';D.showModal()};
 window.OtoCue.openMessage=(p,t)=>{list();sel(p.tel,p.name);$('#mNum').value='';$('#mText').value=t||'';D.showModal()};
 $('#mClose').onclick=()=>D.close();
+$('#mAsk').onclick=async()=>{if(busy)return;const b=$('#mAsk'),lbl=b.textContent;b.textContent='🎙 Listening…';busy=true;let h;try{h=await listen({ms:SR?0:7000})}catch(e){$('#mTo').textContent=e.message}finally{busy=false;b.textContent=lbl}
+ const t=((h&&h.text)||'').trim().replace(/[.!?]+$/,'');if(!t){$('#mTo').textContent='Didn\'t catch that. Tap Ask and try again.';return}
+ const r=t.replace(/^(?:please\s+)?(?:send\s+(?:a\s+)?(?:text|message|sms)\s+(?:to\s+)?|text\s+|message\s+|tell\s+)/i,'').replace(/^([^,]{1,30}),\s*/,'$1 ');
+ const c=parseCmd(/^(?:call|phone|dial|ring)\s/i.test(r)&&!/,/.test(t)?r:'text '+r);D.close();await localCmd(c&&c.k==='call'?r:'text '+r)};
 $('#mNum').oninput=e=>sel(e.target.value.trim()||null);
 $('#mPick').onclick=async()=>{if(!('contacts' in navigator&&'select' in navigator.contacts)){$('#mTo').textContent='Phone picker needs Chrome on Android — type the number instead.';$('#mNum').focus();return}
  try{const r=await navigator.contacts.select(['name','tel'],{multiple:false});const x=r[0];if(x&&x.tel&&x.tel[0])sel(x.tel[0],(x.name||[])[0])}catch(e){$('#mTo').textContent='Contacts: '+e.message}};

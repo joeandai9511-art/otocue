@@ -78,3 +78,4 @@ body.wakeon[data-x] #wakeBadge{display:inline-block}
 #toast{position:fixed;left:50%;top:16px;transform:translateX(-50%);z-index:70;padding:12px 18px;border-radius:999px;background:#2a1a08;border:1px solid #d4a53799;color:var(--c);font-weight:700;box-shadow:0 6px 20px #0008}#toast[hidden]{display:none}
 #tapOpen{display:block;text-align:center;text-decoration:none;font-size:22px;padding:18px;margin:10px 0}#tapOpen[hidden]{display:none}
 .buyrow{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}.buyrow a{flex:1 1 40%;text-align:center;text-decoration:none}
+.mAsk{width:100%;font-size:18px;font-weight:700;padding:16px;margin:4px 0 10px;background:linear-gradient(90deg,#f5c84c,#d99a1e);color:#1a1205;box-shadow:0 0 18px #f5c84c88}
