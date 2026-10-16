@@ -287,7 +287,7 @@ async function translateMsg(t,lang){const L=TLANG[(lang||'').toLowerCase()];if(!
 async function textTo(you,p,msg,lang){if(!msg){await speakWait('What should I say?');try{status('Listening… say your message');msg=((await listen({ms:SR?0:7000})).text||'').trim()}catch(_){}status('');
   if(!msg){const t=prompt(`What should I text ${p.name}?`);msg=(t||'').trim()}if(!msg){say(you,'No message, so I didn\'t text.');return}}
  lang=lang||msgLang();let note='';const orig=msg;if(lang){status(`Translating to ${lang}…`);const r=await translateMsg(msg,lang);status('');if(r.ok)msg=r.t;else note=` (Couldn't translate to ${lang}, sending the original.)`;const mt=document.getElementById('mText');if(mt){mt.value=msg;mt.dataset.orig=orig;if(r.ok)mt.dataset.tr=msg;else delete mt.dataset.tr}}
- await confirmRun(you,`Texting ${p.name}${lang&&!note?' in '+lang:''}: “${msg}”.${note}`,smsUrl(p.tel,msg))}
+ confirmRun(you,`Texting ${p.name}${lang&&!note?' in '+lang:''}: “${msg}”.${note}`,smsUrl(p.tel,msg),{kind:'sms',p,orig,lang:note?'':lang})}
 function tzTime(tz){return new Date().toLocaleTimeString('en-US',{timeZone:tz,hour:'numeric',minute:'2-digit'})}
 function say(you,t){status('');show(you,t)}
 function sayNoContact(you,name){say(you,`I couldn't find “${name}” in your contacts. Add them in Settings → Contacts.`)}
@@ -408,14 +408,34 @@ function openNow(you,msg,url){const short=msg.length<=170;
   const tb=$('#tapOpen');if(tb)tb.remove();
   if(/^https?:/.test(u)&&navigator.userActivation&&navigator.userActivation.isActive){const w=window.open(u,'_blank');if(w)return}
   fb(u);location.href=u})}
-async function confirmRun(you,msg,url){if(!confirmOn()){openNow(you,msg,url);return}show(you,msg+' Say yes or tap Confirm.');const box=$('#cfm');box.hidden=false;$('#cfmTxt').textContent=msg;
- const r=await new Promise(res=>{let done=false;const fin=v=>{if(done)return;done=true;box.hidden=true;stopFn&&stopFn();res(v)};window._cfm=fin;
-  $('#cfmYes').onclick=()=>fin(true);$('#cfmNo').onclick=()=>fin(false);
-  const go=()=>{if(done)return;status('Listening for yes / no…');listen({ms:5000}).then(h=>{if(done)return;const t=(h.text||'').toLowerCase();
-   if(/\b(yes|yeah|yep|sure|ok|okay|confirm|do it|go)\b/.test(t))fin(true);else if(/\b(no|nope|cancel|stop|don'?t)\b/.test(t))fin(false);else status('Tap Confirm or Cancel.')}).catch(()=>status('Tap Confirm or Cancel.'))};
-  if('speechSynthesis' in window&&SR){afterSpeech().then(go)}else status('Tap Confirm or Cancel.');
- });
- status('');if(r){$('#out').textContent='✓ '+msg.replace(/\.$/,'')+'…';window.OtoCue.lastUrl=url;if(/^https?:/.test(url)){if(!window.open(url,'_blank'))location.href=url}else location.href=url}else{$('#out').textContent='Cancelled.';speak('Cancelled.')}}
+// Pending confirm never locks Ask: the card stays up, Ask stays live, and the next utterance can confirm, cancel, edit or replace it.
+const CFM_HINT='Tap Confirm, Cancel, or Ask to change it.';
+function confirmRun(you,msg,url,meta){if(!confirmOn()){openNow(you,msg,url);return}
+ if(window._pend)window._pend.fin(null);
+ const box=$('#cfm');box.hidden=false;$('#cfmTxt').textContent=msg;show(you,msg+' Say yes, or tap Confirm.');
+ let done=false;const P={msg,url,meta,set(m,u){P.msg=m;P.url=u;$('#cfmTxt').textContent=m}};window._pend=P;
+ const fin=v=>{if(done)return;done=true;if(window._pend===P)window._pend=null;box.hidden=true;window._cfm=null;
+  if(v===null)return; // superseded silently
+  status('');if(v){$('#out').textContent='✓ '+P.msg.replace(/\.$/,'')+'…';window.OtoCue.lastUrl=P.url;if(/^https?:/.test(P.url)){if(!window.open(P.url,'_blank'))location.href=P.url}else location.href=P.url}else{$('#out').textContent='Cancelled.';speak('Cancelled.')}};
+ P.fin=fin;window._cfm=fin;$('#cfmYes').onclick=()=>fin(true);$('#cfmNo').onclick=()=>fin(false);
+ const go=()=>{if(done||busy)return;status('Listening for yes / no…');busy=true;listen({ms:5000}).then(h=>{busy=false;if(done)return;pendingSay((h.text||'').trim(),true)}).catch(()=>{busy=false;if(!done)status(CFM_HINT)})};
+ if('speechSynthesis' in window&&SR){afterSpeech().then(go)}else status(CFM_HINT)}
+// returns true if the utterance was consumed by the pending card
+async function pendingSay(t,auto){const P=window._pend;if(!P)return false;const l=t.toLowerCase().replace(/[.!?,]+$/,'').trim();
+ if(!l){status(CFM_HINT);return true}
+ const m=P.meta;
+ if(m&&m.kind==='sms'){
+  const redo=async(text,lang)=>{let out=text,note='';if(lang){status(`Translating to ${lang}…`);const r=await translateMsg(text,lang);status('');if(r.ok)out=r.t;else note=` (Couldn't translate to ${lang}, sending the original.)`}
+   m.orig=text;m.lang=lang;const msg=`Texting ${m.p.name}${lang&&!note?' in '+lang:''}: “${out}”.${note}`;P.set(msg,smsUrl(m.p.tel,out));show(null,msg+' Say yes, or tap Confirm.');status(CFM_HINT);return true};
+  if(/^(?:(?:cancel|stop|turn off|no)\s+(?:the\s+)?translat\w*|no translat\w*|don'?t translate(?: it)?|(?:send it |say it |just )?in english|english(?: only)?)$/.test(l))return redo(m.orig,'');
+  let x=l.match(/^(?:translate|switch|change)\s+(?:it\s+|this\s+|that\s+)?(?:to|in|into)\s+([a-z]+)$|^(?:send it |say it )?in\s+([a-z]+)$/);
+  if(x){const lg=x[1]||x[2],L=Object.keys(TLANG).find(k=>k===lg);if(L)return redo(m.orig,lg[0].toUpperCase()+lg.slice(1));say(null,`Sorry, I can't translate to ${lg} yet.`);status(CFM_HINT);return true}
+  x=t.match(/^(?:change|make)\s+(?:it|that|the message)\s+(?:to|say)\s+(.+)$|^(?:instead\s+)?say\s+(.+)$|^(?:change|replace)\s+(?:it|that|the message)\s+with\s+(.+)$/i);
+  if(x)return redo((x[1]||x[2]||x[3]).trim().replace(/[.!?]+$/,''),m.lang)}
+ if(/^(?:yes|yeah|yep|yup|sure|ok|okay|confirm|send|send it|send that|do it|go|go ahead|go ahead and send(?: it)?|call|call them|call it)$/.test(l)){P.fin(true);return true}
+ if(/^(?:no|nope|cancel|cancel it|cancel that|cancel (?:the )?(?:message|text|call|email)|stop|don'?t|never ?mind|forget it)$/.test(l)){P.fin(false);return true}
+ if(auto&&l.split(' ').length<=2){status(CFM_HINT);return true} // unclear short reply to the auto-listen: keep card
+ P.fin(null);status('');return false} // anything else: dismiss card and run as a new command
 let timers=0;function startTimer(you,n,unit){const ms=n*(/^h/.test(unit)?3600e3:/^s/.test(unit)?1e3:60e3),lbl=`${n} ${n==1?unit.replace(/s$/,''):unit.replace(/s?$/,'s')}`;timers++;
  const el=document.createElement('div');el.className='timer glass';$('#timers').appendChild(el);const end=Date.now()+ms;
  const tick=()=>{const s=Math.max(0,Math.round((end-Date.now())/1000));el.textContent=`⏱ ${lbl}: ${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
@@ -767,6 +787,7 @@ function manage(raw){const l=raw.toLowerCase().trim().replace(/[.?!]+$/,'').repl
  if(/^(?:stop|turn off|dismiss)(?: it)?$/.test(l)&&O.ringing()){O.stopAlarm();say(raw,'Alarm stopped.');return true}
  return false}
 const prev=localCmd;localCmd=async t=>manage(t)||prev(t);O.manage=manage;
+{const pv=localCmd;localCmd=async t=>{if(window._pend&&await pendingSay(t))return true;return pv(t)}}
 })();
 
 // ---- first-run setup / edit profile
