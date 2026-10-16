@@ -282,7 +282,8 @@ function say(you,t){status('');show(you,t)}
 function sayNoContact(you,name){say(you,`I couldn't find “${name}” in your contacts. Add them in Settings → Contacts.`)}
 const confirmOn=()=>localStorage.getItem('otocue_confirm')!=='0';
 // open a URL right away: new tab with a fresh user gesture, same tab otherwise; big tap fallback if blocked
-let lastQ='';const PLAYAPPS={spotify:['Spotify',(e,p)=>'https://open.spotify.com/search/'+e+(p?'/podcasts':'')],netflix:['Netflix',e=>'https://www.netflix.com/search?q='+e],hulu:['Hulu',e=>'https://www.hulu.com/search?q='+e],
+let lastQ='';const spotifyUrl=(e,p)=>{const web='https://open.spotify.com/search/'+e+(p?'/podcasts':'');return /Android/i.test(navigator.userAgent)?'intent:search:'+e+'#Intent;scheme=spotify;package=com.spotify.music;S.browser_fallback_url='+encodeURIComponent(web)+';end':web};
+const PLAYAPPS={spotify:['Spotify',spotifyUrl],netflix:['Netflix',e=>'https://www.netflix.com/search?q='+e],hulu:['Hulu',e=>'https://www.hulu.com/search?q='+e],
  disney:['Disney+',e=>'https://www.disneyplus.com/search?q='+e],'prime video':['Prime Video',e=>'https://www.amazon.com/s?k='+e+'&i=instant-video'],max:['HBO Max',e=>'https://play.hbomax.com/search?q='+e],
  'youtube music':['YouTube Music',e=>'https://music.youtube.com/search?q='+e],'apple music':['Apple Music',e=>'https://music.apple.com/us/search?term='+e],pandora:['Pandora',e=>'https://www.pandora.com/search/'+e+'/all']};
 // top YouTube video via free no-key APIs (CORS-enabled); falls back to search results
@@ -290,17 +291,23 @@ let lastQ='';const PLAYAPPS={spotify:['Spotify',(e,p)=>'https://open.spotify.com
 const YT_SRC=[['piped.private.coffee','https://api.piped.private.coffee/search?q=%s&filter=videos','p'],['invidious.f5.si','https://invidious.f5.si/api/v1/search?q=%s&type=video','i'],
  ['iv.melmac.space','https://iv.melmac.space/api/v1/search?q=%s&type=video','i']];
 const tfetch=(u,ms,o={})=>{const ac=new AbortController(),t=setTimeout(()=>ac.abort(),ms);return fetch(u,{...o,signal:ac.signal}).finally(()=>clearTimeout(t))};
-async function ytInstances(e){const errs=[];return Promise.any(YT_SRC.map(async([name,u,k])=>{try{const r=await tfetch(u.replace('%s',e),6000);if(!r.ok)throw new Error(r.status);const j=await r.json();
- const id=k==='p'?(((j.items||[]).find(x=>/watch\?v=/.test(x.url||''))||{}).url||'').split('v=')[1]:((Array.isArray(j)?j:[]).find(x=>x.videoId)||{}).videoId;if(!id||!/^[\w-]{11}$/.test(id))throw new Error('no id');return{id,src:name}}catch(x){errs.push(name+':'+(x.name==='AbortError'?'timeout':x.message));throw x}})).catch(()=>{throw new Error(errs.join(', '))})}
+function ytPick(items,q){const ql=q.toLowerCase(),bad=/\b(remake|cover|karaoke|lyrics?|slowed|sped ?up|nightcore|8d|reaction|reacts?|instrumental|remix|1 hour|loop|bass ?boosted|clean)\b/i,by=ql.match(/\bby\s+(.+)$/),artist=by?by[1]:'',song=(by?ql.slice(0,by.index):ql).trim(),sw=song.split(/\s+/).filter(w=>w.length>2);
+ let best=null,bs=-1e9;items.forEach((x,i)=>{const t=(x.title||'').toLowerCase(),up=(x.up||'').toLowerCase();let sc=-i*0.3;
+  if(artist&&up.replace(/[^a-z0-9]/g,'').includes(artist.replace(/[^a-z0-9]/g,'')))sc+=5;if(/vevo$/.test(up))sc+=4;if(/ - topic$/.test(up))sc+=3;if(x.ver)sc+=2;if(/official/.test(t))sc+=3;
+  sc+=sw.filter(w=>t.includes(w)).length;if(t.replace(/^.*?-\s*/,'').replace(/[^a-z0-9 ]/g,'').trim()===song.replace(/[^a-z0-9 ]/g,''))sc+=1.5;
+  const m=t.match(bad)||t.match(/\(\s*(?:version \d|live|\d{3}hz)/);if(m&&!ql.includes(m[0].replace(/[()\s]/g,'').slice(0,4)))sc-=6;if(sc>bs){bs=sc;best=x}});return best}
+async function ytInstances(e,q){const errs=[];return Promise.any(YT_SRC.map(async([name,u,k])=>{try{const r=await tfetch(u.replace('%s',e),6000);if(!r.ok)throw new Error(r.status);const j=await r.json();
+ const items=k==='p'?(j.items||[]).filter(x=>/watch\?v=/.test(x.url||'')).map(x=>({id:x.url.split('v=')[1],title:x.title,up:x.uploaderName,ver:x.uploaderVerified})):(Array.isArray(j)?j:[]).filter(x=>x.videoId).map(x=>({id:x.videoId,title:x.title,up:x.author,ver:x.authorVerified}));
+ const b=ytPick(items.slice(0,15),q),id=b&&b.id;if(!id||!/^[\w-]{11}$/.test(id))throw new Error('no id');return{id,src:name,title:b.title}}catch(x){errs.push(name+':'+(x.name==='AbortError'?'timeout':x.message));throw x}})).catch(()=>{throw new Error(errs.join(', '))})}
 async function ytOembed(id){try{const r=await tfetch('https://www.youtube.com/oembed?url='+encodeURIComponent('https://www.youtube.com/watch?v='+id)+'&format=json',5000);return r.ok}catch(_){return false}}
 async function ytGemini(q){if(!S.key)throw new Error('no key');const {url,init}=buildRequest([{text:`Find the official YouTube video for: "${q}". Reply with ONLY the 11-character YouTube video ID, nothing else.`}],'You find YouTube video IDs using Google Search. Output only the ID.',undefined,[],true);
  const r=await tfetch(url,9000,init);if(!r.ok)throw new Error('gemini '+r.status);const j=await r.json(),t=(j.candidates?.[0]?.content?.parts||[]).filter(x=>!x.thought).map(x=>x.text||'').join(' ');
  const ids=[...new Set([...(t.match(/(?:v=|youtu\.be\/|^|\s)([\w-]{11})(?=\b|$)/g)||[])].map(x=>x.slice(-11)))];for(const id of ids)if(await ytOembed(id))return{id,src:'gemini+oembed'};throw new Error('gemini: no valid id')}
 function logPlay(src,q,extra){const v=`${src} · “${q}” · ${new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}${extra?' · '+extra:''}`;localStorage.setItem('otocue_playsrc',v);console.info('[OtoCue] play source:',v)}
-async function ytTop(q){const e=encodeURIComponent(q);let why='';
- const work=(async()=>{try{return await ytInstances(e)}catch(x){why=x.message}try{return await ytGemini(q)}catch(x){why+=(why?'; ':'')+x.message}return null})();
+async function ytTop(q){const e=encodeURIComponent(q.replace(/\s+by\s+/i,' '));let why='';
+ const work=(async()=>{try{return await ytInstances(e,q)}catch(x){why=x.message}try{return await ytGemini(q)}catch(x){why+=(why?'; ':'')+x.message}return null})();
  const r=await Promise.race([work,sleep(15000).then(()=>null)]);
- if(r){logPlay(r.src,q);return 'https://www.youtube.com/watch?v='+r.id}logPlay('search results (fallback)',q,why||'timeout');return 'https://www.youtube.com/results?search_query='+e}
+ if(r){logPlay(r.src,q,r.title);return 'https://www.youtube.com/watch?v='+r.id}logPlay('search results (fallback)',q,why||'timeout');return 'https://www.youtube.com/results?search_query='+e}
 function lastTopic(){return lastQ?lastQ.toLowerCase().replace(/[?.!]/g,'').split(/\s+/).filter(w=>!/^(what|which|where|how|who|does|do|did|is|are|should|can|could|would|my|i|me|a|an|the|need|needs|best|kind|of|type|for|to|eat|use|good|recommend|you)$/.test(w)).join(' '):''}
 async function buyCmd(you,q){let prod=q,store='',tips='',cat='';status('Finding where to buy…');
  try{const ctx=HIST.slice(-4).map(h=>(h.role==='user'?'User: ':'Assistant: ')+h.parts[0].text).join('\n');
@@ -363,7 +370,13 @@ function parseCmd(raw){const t=raw.trim().replace(/[.?!]+$/,''),l=t.toLowerCase(
  if(m=l.match(/^(?:find\s+(?:me\s+)?(?:a\s+|an\s+)?|nearest\s+|closest\s+)?(?:([a-z-]+(?:\s[a-z-]+)?)\s+)?(schools?|colleges?|universit(?:y|ies))(?:\s+(?:near me|nearby))?$/)){const t=(m[1]||'').replace(/^(?:a|an|the)$/,''),col=/^c|^u/.test(m[2]);const q=col?(m[2].startsWith('u')?'universities':'colleges'):(t?t.replace(/\s+/g,'+')+'+':'')+'schools';return{k:'url',msg:`Finding ${q.replace(/\+/g,' ')} near you.`,u:'https://www.google.com/maps/search/'+q+'+near+me'}}
  if((m=l.match(/^(?:find\s+(?:me\s+)?|where(?:'s| is)\s+|show me\s+)?(?:a\s+|an\s+|the\s+)?(?:nearest\s+|closest\s+)?(.+?)\s+(?:near me|nearby|around here)$/))||(m=l.match(/^(?:find\s+(?:me\s+)?(?:a|an|the)\s+(?:nearest\s+|closest\s+)?|where(?:'s| is)\s+(?:the\s+)?(?:nearest|closest)\s+|(?:nearest|closest)\s+)(.+?)$/))){const q=m[1].replace(/^(?:a|an|the)\s+/,'');if(q&&q.split(' ').length<=4)return{k:'url',msg:`Finding ${q} near you.`,u:'https://www.google.com/maps/search/'+encodeURIComponent(q).replace(/%20/g,'+')+'+near+me'}}
  if(m=l.match(/^(?:navigate|directions|take me|drive|get directions|give me directions)\s+(?:to\s+)?(.+)$/))return{k:'nav',q:m[1]};
- if(m=l.match(/^(?:play|watch|stream|listen to|put on)\s+(.+?)(?:\s+(?:on|in|using|with|from)\s+(spotify|youtube music|youtube|netflix|hulu|disney\s*\+|disney plus|disney|prime video|amazon prime video|amazon prime|prime|hbo max|max|apple music|pandora))?$/)){const on=(m[2]||'').replace(/\s+/g,' ').replace(/^disney.*$/,'disney').replace(/^(amazon prime video|amazon prime|prime)$/,'prime video').replace(/^hbo max$/,'max');return{k:'play',q:m[1],on:on==='youtube'?'':on}}
+ {const AP="spotify|youtube music|youtube|netflix|hulu|disney\\s*\\+|disney plus|disney|prime video|amazon prime video|amazon prime|prime|hbo max|max|apple music|pandora",V='play|watch|stream|listen to|put on';
+  let mm=l.match(new RegExp('^(?:'+V+')\\s+(.+)$'))||l.match(new RegExp('^(?:'+AP+')\\s*,?\\s+(?:'+V+')\\s+(.+)$'));let rest=mm&&mm[1],on='';
+  if(mm){const pre=l.match(new RegExp('^('+AP+')\\s*,?\\s+(?:'+V+')\\s'));if(pre)on=pre[1]}
+  if(!mm){const t2=l.match(new RegExp('^(.+?)\\s+(?:on|in|using)\\s+('+AP+')$'));if(t2&&!/^(?:search|find|look|get|order|buy|navigate|take|text|call|set|open)\b/.test(t2[1])){rest=t2[0]}}
+  if(rest){const a=rest.match(new RegExp('\\s*\\b(?:on|in|using|with|from)\\s+('+AP+')(?=\\s|$)'));if(a){on=on||a[1];rest=(rest.slice(0,a.index)+' '+rest.slice(a.index+a[0].length)).replace(/\s+/g,' ').trim()}
+   rest=rest.replace(/\s+(?:tonight|right now|now|please|for me|for us|for the kids|for my kids|real quick)$/,'').trim();
+   if(rest){on=on.replace(/\s+/g,' ').replace(/^disney.*$/,'disney').replace(/^(amazon prime video|amazon prime|prime)$/,'prime video').replace(/^hbo max$/,'max');return{k:'play',q:rest,on:on==='youtube'?'':on}}}}
  if(m=l.match(/^open\s+(?:the\s+)?(.+?)(?:\s+app)?$/))if(APPS[m[1]])return{k:'open',app:m[1]};
  if(m=l.match(/^(?:set\s+(?:a\s+)?)?timer\s+(?:for\s+)?(\d+|[a-z]+(?:\s[a-z]+)?)\s+(minutes?|mins?|hours?|seconds?|secs?)/)||(m=l.match(/^set\s+(?:a\s+)?(\d+|[a-z]+)\s+(minutes?|hours?|seconds?)\s+timer/))){const n=+m[1]||NUMW[m[1]];if(n)return{k:'timer',n,unit:m[2].replace(/^min$|^mins$/,'minutes').replace(/^secs?$/,'seconds')}}
  if(m=l.match(/^(?:what(?:'s| is)?\s+(?:the\s+)?)?(?:current\s+)?time\s+(?:is\s+it\s+)?(?:right\s+now\s+|now\s+)?in\s+(.+?)[?.!]*$/))return{k:'tz',city:m[1].replace(/^the\s+/,'')};
