@@ -229,8 +229,8 @@ async function confirmRun(you,msg,url){show(you,msg+' Say yes or tap Confirm.');
 let timers=0;function startTimer(you,n,unit){const ms=n*(/^h/.test(unit)?3600e3:/^s/.test(unit)?1e3:60e3),lbl=`${n} ${n==1?unit.replace(/s$/,''):unit.replace(/s?$/,'s')}`;timers++;
  const el=document.createElement('div');el.className='timer glass';$('#timers').appendChild(el);const end=Date.now()+ms;
  const tick=()=>{const s=Math.max(0,Math.round((end-Date.now())/1000));el.textContent=`⏱ ${lbl}: ${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
-  if(s<=0){clearInterval(iv);el.textContent=`⏰ ${lbl} timer done!`;el.classList.add('done');try{navigator.vibrate&&navigator.vibrate([400,200,400,200,400])}catch(_){}speak(`Your ${lbl} timer is done.`);setTimeout(()=>el.remove(),15000)}};
- const iv=setInterval(tick,1000);tick();say(you,`Timer set for ${lbl}.`)}
+  if(s<=0){clearInterval(iv);window._tmr=(window._tmr||[]).filter(x=>x.iv!==iv);el.textContent=`⏰ ${lbl} timer done!`;el.classList.add('done');try{navigator.vibrate&&navigator.vibrate([400,200,400,200,400])}catch(_){}speak(`Your ${lbl} timer is done.`);setTimeout(()=>el.remove(),15000)}};
+ const iv=setInterval(tick,1000);(window._tmr=window._tmr||[]).push({el,iv,end,lbl});tick();say(you,`Timer set for ${lbl}.`)}
 const NUMW={a:1,an:1,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,fifteen:15,twenty:20,thirty:30,forty:40,'forty five':45,sixty:60};
 function parseCmd(raw){const t=raw.trim().replace(/[.?!]+$/,''),l=t.toLowerCase();let m;
  if(m=l.match(/^(?:please\s+)?(?:call|phone|dial|ring)\s+(.+)$/))return{k:'call',who:t.slice(t.length-m[1].length)};
@@ -320,7 +320,7 @@ function fire(x){if(ringing)return;ringing=x;speechSynthesis&&speechSynthesis.ca
  $('#alarmSnooze').onclick=()=>{const t=Date.now()+300e3;stopRing();const a=load();a.push({id:'s'+t,t,song:x.song});saveA(a);status('Snoozed until '+fmt(t)+'.')}}
 setInterval(()=>{const a=load(),now=Date.now(),due=a.filter(x=>x.t<=now);if(due.length){saveA(a.filter(x=>x.t>now));fire(due[0])}else if(a.some(x=>x.t-now<120e3))render()},1000);
 render();lock();
-Object.assign(window.OtoCue,{parseAlarm,parseWhen,stopAlarm:stopRing,addAlarm:add,lock,fireAlarm:fire});
+Object.assign(window.OtoCue,{parseAlarm,parseWhen,stopAlarm:stopRing,addAlarm:add,lock,fireAlarm:fire,loadAlarms:load,saveAlarms:saveA,ringing:()=>ringing,fmtTime:fmt});
 })();
 
 // ---- v3: reminders, calendar, conversation, contacts, offline, earbud button
@@ -436,4 +436,42 @@ async function doSocial(you,s){let text=s.last?lastAnswer:s.text;
  await new Promise(res=>{const fin=async v=>{box.hidden=true;if(v){const r=await shareNow(s.net,text);O.lastShare={net:s.net,text,r}}else $('#out').textContent='Cancelled.';res()};$('#cfmYes').onclick=()=>fin(true);$('#cfmNo').onclick=()=>fin(false)})}
 const prev=localCmd;localCmd=async text=>{const s=parseSocial(text);if(s){await doSocial(text,s);return true}const e=parseEmail(text);if(e){await doEmail(text,e);return true}return prev(text)};
 Object.assign(O,{parseEmail,parseSocial,shareNow});
+})();
+
+// ---- v3c: manage alarms/reminders/timers by voice (local, instant, no confirm)
+(function(){
+const O=window.OtoCue;
+const kindOf=w=>/remind/.test(w)?'reminder':/timer/.test(w)?'timer':'alarm';
+const isK=(x,k)=>k==='reminder'?!!x.text:!x.text;
+const desc=x=>x.text?`reminder at ${O.fmtTime(x.t)} to ${x.text}`:`alarm at ${O.fmtTime(x.t)}${x.song?' with '+x.song:''}`;
+const sameHM=(a,b)=>{const x=new Date(a),y=new Date(b);return x.getHours()===y.getHours()&&x.getMinutes()===y.getMinutes()};
+function manage(raw){const l=raw.toLowerCase().trim().replace(/[.?!]+$/,'').replace(/^(?:please|hey cue|okay|ok)[ ,]+/,'');let m;
+ const list=()=>O.loadAlarms().sort((a,b)=>a.t-b.t);
+ // snooze
+ if(/^snooze(?: (?:it|the alarm|my alarm|alarm))?(?: for \d+ minutes?)?$/.test(l)){const b=$('#alarmSnooze');if(b){b.click();say(raw,'Snoozed for 5 minutes.')}else say(raw,'No alarm is ringing right now.');return true}
+ // list
+ if(/^(?:what|which|list|show|read)\b.*\b(alarms?|reminders?|timers?)\b|^(?:do i have|have i got|are there) any (alarms?|reminders?|timers?)/.test(l)){
+  const k=/remind/.test(l)&&!/alarm/.test(l)?'reminder':/alarm/.test(l)&&!/remind/.test(l)?'alarm':null,a=list().filter(x=>!k||isK(x,k)),tm=(window._tmr||[]);
+  const parts=a.map(desc);if(!k||/timer/.test(l))tm.forEach(t=>{const s=Math.max(0,Math.round((t.end-Date.now())/1000));parts.push(`${t.lbl} timer with ${Math.floor(s/60)}:${String(s%60).padStart(2,'0')} left`)});
+  say(raw,parts.length?`You have ${parts.length}: ${parts.join('; ')}.`:`You have no ${k?k+'s':'alarms, reminders or timers'} set.`);return true}
+ // change
+ if(m=l.match(/^(?:change|move|reschedule|update|set|push)\s+(?:my\s+|the\s+)?(?:next\s+)?(alarm|reminder)\s+(?:to|for|until)\s+(.+)$/)){const k=kindOf(m[1]),w=O.parseWhen(m[2].replace(/^at\s+/,''));
+  if(!w){say(raw,`Sorry, I didn't understand the time “${m[2]}”.`);return true}const a=list(),x=a.find(y=>isK(y,k));
+  if(!x){if(k==='alarm'){O.addAlarm(raw,w,'');return true}say(raw,'You have no reminders to change.');return true}
+  x.t=w;O.saveAlarms(a);say(raw,`Done. Your ${k} is now set for ${O.fmtTime(w)}.`);return true}
+ // cancel / stop
+ if(m=l.match(/^(?:cancel|delete|remove|turn off|switch off|stop|clear|disable|kill|get rid of)\s+(.*?)\b(alarms?|reminders?|timers?)\b\s*(.*)$/)){
+  const k=kindOf(m[2]),mods=(m[1]+' '+m[3]).replace(/\b(my|the|of|for|at|set|that|this|one)\b/g,' ').replace(/\s+/g,' ').trim(),all=/\ball\b|\bevery\b/.test(mods)||/s$/.test(m[2]);
+  if(k==='alarm'&&O.ringing()&&!all){O.stopAlarm();say(raw,'Alarm stopped.');return true}
+  if(k==='timer'){const tm=window._tmr||[];if(!tm.length){say(raw,'You have no timers running.');return true}const kill=all?tm.slice():[tm.slice().sort((a,b)=>a.end-b.end)[0]];
+   kill.forEach(t=>{clearInterval(t.iv);t.el.remove()});window._tmr=tm.filter(t=>!kill.includes(t));say(raw,all&&kill.length>1?`Cancelled all ${kill.length} timers.`:`Cancelled your ${kill[0].lbl} timer.`);return true}
+  const a=list(),mine=a.filter(x=>isK(x,k));if(!mine.length){say(raw,`You have no ${k}s set.`);return true}
+  let kill;const tq=mods.replace(/\b(all|every|next|first)\b/g,'').trim(),tw=tq?O.parseWhen(tq):null;
+  if(all)kill=mine;else if(tw)kill=mine.filter(x=>sameHM(x.t,tw));else if(tq&&k==='reminder')kill=mine.filter(x=>x.text.toLowerCase().includes(tq.replace(/^(to|about)\s+/,'')));else kill=[mine[0]];
+  if(!kill.length){say(raw,`I couldn't find a ${k} for “${tq}”. You have: ${mine.map(desc).join('; ')}.`);return true}
+  O.saveAlarms(a.filter(x=>!kill.includes(x)));const left=mine.length-kill.length;
+  say(raw,(kill.length>1?`Cancelled all ${kill.length} ${k}s.`:`Cancelled your ${desc(kill[0])}.`)+(left?` You still have ${left} ${k}${left>1?'s':''}.`:''));return true}
+ if(/^(?:stop|turn off|dismiss)(?: it)?$/.test(l)&&O.ringing()){O.stopAlarm();say(raw,'Alarm stopped.');return true}
+ return false}
+const prev=localCmd;localCmd=async t=>manage(t)||prev(t);O.manage=manage;
 })();
