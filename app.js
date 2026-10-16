@@ -195,6 +195,7 @@ function list(){let c=[];try{c=JSON.parse(localStorage.getItem('otocue_contacts'
 $('#msgBtn').onclick=()=>{list();sel(null);$('#mNum').value='';$('#mText').value='';D.showModal()};
 window.OtoCue.openMessage=(p,t)=>{list();sel(p.tel,p.name);$('#mNum').value='';$('#mText').value=t||'';D.showModal()};
 $('#mClose').onclick=()=>D.close();
+$('#mLang').value=msgLang();$('#mLang').onchange=e=>localStorage.setItem('otocue_msglang',e.target.value);
 $('#mAsk').onclick=async()=>{if(busy)return;const b=$('#mAsk'),lbl=b.textContent;b.textContent='🎙 Listening…';busy=true;let h;try{h=await listen({ms:SR?0:7000})}catch(e){$('#mTo').textContent=e.message}finally{busy=false;b.textContent=lbl}
  const t=((h&&h.text)||'').trim().replace(/[.!?]+$/,'');if(!t){$('#mTo').textContent='Didn\'t catch that. Tap Ask and try again.';return}
  const r=t.replace(/^(?:please\s+)?(?:send\s+(?:a\s+)?(?:text|message|sms)\s+(?:to\s+)?|text\s+|message\s+|tell\s+)/i,'').replace(/^([^,]{1,30}),\s*/,'$1 ');
@@ -204,9 +205,10 @@ $('#mPick').onclick=async()=>{if(!('contacts' in navigator&&'select' in navigato
  try{const r=await navigator.contacts.select(['name','tel'],{multiple:false});const x=r[0];if(x&&x.tel&&x.tel[0])sel(x.tel[0],(x.name||[])[0])}catch(e){$('#mTo').textContent='Contacts: '+e.message}};
 $('#mMic').onclick=async()=>{if(busy)return;const b=$('#mMic');b.textContent='🎙 Listening…';
  try{const h=await listen({ms:SR?0:8000});if(h.text)$('#mText').value=(($('#mText').value+' ')+h.text).trim();else if(h.audio)$('#mTo').textContent='Voice typing needs speech recognition — please type the message.'}catch(e){$('#mTo').textContent=e.message}finally{b.textContent='🎙 Speak'}};
-$('#mSend').onclick=()=>{const n=(to||'').replace(/[^+\d]/g,''),t=$('#mText').value.trim();
+$('#mSend').onclick=async()=>{const n=(to||'').replace(/[^+\d]/g,'');let t=$('#mText').value.trim();
  if(!n){$('#mTo').textContent='Choose a contact or enter a number.';return}if(!t){$('#mTo').textContent='Say or type a message.';return}
- buzz([10,30,10]);D.close();location.href=smsUrl(n,t)};
+ const lg=msgLang();if(lg&&$('#mText').dataset.tr!==t){$('#mTo').textContent=`Translating to ${lg}…`;const r=await translateMsg(t,lg);if(r.ok){t=r.t;$('#mText').value=t;$('#mText').dataset.tr=t;$('#mTo').textContent=`Translated to ${lg}. Sending…`}else $('#mTo').textContent=`Couldn't translate, sending the original.`;await new Promise(r=>setTimeout(r,900))}
+ buzz([10,30,10]);D.close();window.OtoCue.lastUrl=smsUrl(n,t);location.href=smsUrl(n,t)};
 })();
 
 // ---- local voice commands (no Gemini)
@@ -242,9 +244,18 @@ async function resolveOrPick(you,who,kind,then){const p=findContact(who);if(p&&p
  say(you,`Pick ${who} once and I'll remember.`);let b=$('#tapOpen');if(!b){b=document.createElement('a');b.id='tapOpen';b.className='btn';$('#timers').before(b)}b.removeAttribute('href');b.hidden=false;b.textContent=`👤 Pick ${who} to ${kind}`;
  b.onclick=async e=>{e.preventDefault();b.remove();try{const q=await pickFor(who);if(q)then(q)}catch(err){status('Contacts: '+err.message)}}}
 function speakWait(t){show(null,t);return new Promise(r=>{let n=0;const w=setInterval(()=>{if(!('speechSynthesis' in window)||(!speechSynthesis.speaking&&n>2)||n>40){clearInterval(w);r()}n++},250)})}
-async function textTo(you,p,msg){if(!msg){await speakWait('What should I say?');try{status('Listening… say your message');msg=((await listen({ms:SR?0:7000})).text||'').trim()}catch(_){}status('');
+var TLANG={spanish:['es'],portuguese:['pt'],french:['fr'],chinese:['zh-CN'],mandarin:['zh-CN'],vietnamese:['vi'],tagalog:['tl','fil-PH'],filipino:['tl','fil-PH'],korean:['ko'],arabic:['ar'],hindi:['hi']};
+function msgLang(){return localStorage.getItem('otocue_msglang')||''}
+async function translateMsg(t,lang){const L=TLANG[(lang||'').toLowerCase()];if(!L||!t)return{t,ok:true};
+ try{const r=(await geminiRaw([{text:t}],`Translate the user's text message into ${lang}. Keep the tone casual. Output only the translation.`,undefined,[],false)).trim();if(r)return{t:r,ok:true,via:'gemini'}}catch(_){}
+ for(const code of L){try{const j=await (await fetch('https://api.mymemory.translated.net/get?q='+encodeURIComponent(t)+'&langpair=en|'+code)).json();if(!j||j.responseStatus!=200)continue;const src=new Set(t.toLowerCase().match(/[a-z']+/g)||[]),eng=r=>{const w=r.toLowerCase().match(/[a-z']+/g)||[];return w.length&&w.filter(x=>src.has(x)).length/w.length>=.5};
+  const ms=j.matches||[],cands=[...ms.filter(m=>m['created-by']==='MT!').map(m=>m.translation),(j.responseData||{}).translatedText];
+  for(let r of cands){r=(r||'').trim();if(r&&!/MYMEMORY WARNING|INVALID/i.test(r)&&!eng(r)){const x=document.createElement('textarea');x.innerHTML=r;return{t:x.value,ok:true,via:'mymemory'}}}}catch(_){}}
+ return{t,ok:false}}
+async function textTo(you,p,msg,lang){if(!msg){await speakWait('What should I say?');try{status('Listening… say your message');msg=((await listen({ms:SR?0:7000})).text||'').trim()}catch(_){}status('');
   if(!msg){const t=prompt(`What should I text ${p.name}?`);msg=(t||'').trim()}if(!msg){say(you,'No message, so I didn\'t text.');return}}
- await confirmRun(you,`Texting ${p.name}: “${msg}”.`,smsUrl(p.tel,msg))}
+ lang=lang||msgLang();let note='';if(lang){status(`Translating to ${lang}…`);const r=await translateMsg(msg,lang);status('');if(r.ok)msg=r.t;else note=` (Couldn't translate to ${lang}, sending the original.)`;const mt=document.getElementById('mText');if(mt)mt.value=msg}
+ await confirmRun(you,`Texting ${p.name}${lang&&!note?' in '+lang:''}: “${msg}”.${note}`,smsUrl(p.tel,msg))}
 function tzTime(tz){return new Date().toLocaleTimeString('en-US',{timeZone:tz,hour:'numeric',minute:'2-digit'})}
 function say(you,t){status('');show(you,t)}
 function sayNoContact(you,name){say(you,`I couldn't find “${name}” in your contacts. Add them in Settings → Contacts.`)}
@@ -287,7 +298,7 @@ function parseCmd(raw){const t=raw.trim().replace(/[.?!]+$/,''),l=t.toLowerCase(
  if(m=l.match(/^(?:please\s+)?(?:buy|order|find|get|search|shop for|look for|look up)\s+(?:me\s+)?(.+?)\s+(?:on|at|from)\s+(amazon|walmart|target|petco|petsmart|chewy|home depot|lowe'?s|best buy|cvs|walgreens|autozone)(?:\.com)?$/))return{k:'store',q:m[1].replace(/^(?:some|a|an|the)\s+/,''),st:m[2].replace(/'/g,'').replace(' ','')};
  if(m=l.match(/^(?:so\s+|ok\s+|okay\s+|and\s+)?(?:where|how)\s+(?:can|could|do|should|would)\s+(?:i|we)\s+(?:buy|purchase|get|order)\s*(.*?)(?:\s+(?:from|online|near me|nearby))?$/))if(!/^(?:to|there|home|back|in|out|on|rid)\b/.test(m[1])){const x=m[1].replace(/^(?:some|a|an|the)\s+/,'').trim();return{k:'buy',q:/^(?:it|that|this|them|those|these|one|some|any|stuff|)$/.test(x)?'':x}}
  if(m=l.match(/^(?:please\s+)?(?:call|phone|dial|ring)\s+(.+)$/))return{k:'call',who:t.slice(t.length-m[1].length)};
- if(m=t.match(/^(?:please\s+)?(?:send\s+(?:a\s+)?(?:text|message|sms)\s+to|text|message|sms|send\s+(?:a\s+)?(?:text|message)\s+(?=\S))\s*(.+)$/i)){const r=m[1].replace(/^to\s+/i,''),k=r.match(/^(.+?)(?:\s*,?\s+(?:that|saying|says|and say|to say)\s+|\s*:\s*)(.+)$/i);if(k&&findContact(k[1]))return{k:'text',who:k[1],msg:k[2]};const x=splitWho(r);return{k:'text',who:x.who,msg:x.msg,p:x.p}}
+ if(m=t.match(/^(?:please\s+)?(?:send\s+(?:a\s+)?(?:text|message|sms)\s+to|text|message|sms|send\s+(?:a\s+)?(?:text|message)\s+(?=\S))\s*(.+)$/i)){let r=m[1].replace(/^to\s+/i,''),lg='';const lm=r.match(/\s+in\s+(spanish|portuguese|french|chinese|mandarin|vietnamese|tagalog|filipino|korean|arabic|hindi)\b[:,]?/i);if(lm){lg=lm[1][0].toUpperCase()+lm[1].slice(1).toLowerCase();r=(r.slice(0,lm.index)+' '+r.slice(lm.index+lm[0].length)).replace(/\s+/g,' ').trim()}const k=r.match(/^(.+?)(?:\s*,?\s+(?:that|saying|says|and say|to say)\s+|\s*:\s*)(.+)$/i);if(k&&findContact(k[1]))return{k:'text',who:k[1],msg:k[2],lg};const x=splitWho(r);return{k:'text',who:x.who,msg:x.msg,p:x.p,lg}}
  if(m=t.match(/^(?:send\s+(?:an\s+)?)?e-?mail(?:\s+to)?\s+(\S+(?:\s\S+)?)(?:\s*,?\s+(?:that|saying|about)?\s*(.*))?$/i)){
   const ws=(m[1]+' '+(m[2]||'')).trim().split(/\s+/);for(const n of [2,1]){const c=findContact(ws.slice(0,n).join(' '));if(c)return{k:'email',who:ws.slice(0,n).join(' '),c,msg:ws.slice(n).join(' ').replace(/^(that|saying|about)\s+/i,'')}}return{k:'email',who:ws[0],msg:ws.slice(1).join(' ')}}
  {const M=l.match(/^(?:please\s+)?(?:(?:can you\s+|could you\s+)?(?:get|buy|book|find|grab|order)\s+(?:me\s+|us\s+)?(?:some\s+|a\s+couple\s+|two\s+|2\s+)?(?:movie\s+)?tickets?\s+(?:to\s+see|to|for|to watch)\s+|(?:movie\s+)?tickets?\s+(?:to\s+see\s+|for\s+|to\s+)|(?:movie\s+)?showtimes?\s+(?:for\s+)?|when\s+is\s+(.+?)\s+playing|i\s+(?:want|wanna|would like)\s+to\s+(?:see|watch)\s+(?=.+\s+(?:in|at)\s+(?:the\s+)?(?:theaters?|theatres?|cinemas?|the movies)$))(.*)$/);
@@ -319,8 +330,8 @@ let localCmd=async function(text){const c=parseCmd(text);if(!c)return false;cons
   case 'buy':await buyCmd(you,c.q);break;
   case 'call':{const dig=digits(c.who);if(!findContact(c.who)&&dig.length>=3){await confirmRun(you,`Calling ${c.who}.`,'tel:'+dig);break}
    await resolveOrPick(you,c.who,'call',p=>confirmRun(you,`Calling ${p.name}.`,'tel:'+digits(p.tel)));break}
-  case 'text':{const dig=digits(c.who);if(!c.p&&!findContact(c.who)&&dig.length>=3){await textTo(you,{name:c.who,tel:dig},c.msg);break}
-   if(c.p){await textTo(you,c.p,c.msg);break}await resolveOrPick(you,c.who,'text',p=>textTo(you,p,c.msg));break}
+  case 'text':{const dig=digits(c.who);if(!c.p&&!findContact(c.who)&&dig.length>=3){await textTo(you,{name:c.who,tel:dig},c.msg,c.lg);break}
+   if(c.p){await textTo(you,c.p,c.msg,c.lg);break}await resolveOrPick(you,c.who,'text',p=>textTo(you,p,c.msg,c.lg));break}
   case 'email':{const p=c.c||findContact(c.who);if(!p||!p.email){p?say(you,`${p.name} has no email in your shared contacts.`):sayNoContact(you,c.who);break}
    await confirmRun(you,`Emailing ${p.name}${c.msg?': “'+c.msg+'”':''}.`,'mailto:'+p.email+'?body='+encodeURIComponent(c.msg||''));break}
   case 'url':openNow(you,c.msg,c.u);break;

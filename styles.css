@@ -79,3 +79,4 @@ body.wakeon[data-x] #wakeBadge{display:inline-block}
 #tapOpen{display:block;text-align:center;text-decoration:none;font-size:22px;padding:18px;margin:10px 0}#tapOpen[hidden]{display:none}
 .buyrow{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}.buyrow a{flex:1 1 40%;text-align:center;text-decoration:none}
 .mAsk{width:100%;font-size:18px;font-weight:700;padding:16px;margin:4px 0 10px;background:linear-gradient(90deg,#f5c84c,#d99a1e);color:#1a1205;box-shadow:0 0 18px #f5c84c88}
+.mlang{display:flex;align-items:center;gap:8px;margin:8px 0 2px}.mlang label{margin:0;white-space:nowrap}.mlang select{flex:1;padding:8px;border-radius:12px}
