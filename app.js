@@ -325,12 +325,39 @@ const CATS={pet:['petco','petsmart','chewy'],home:['homedepot','lowes'],electron
 function catOf(t){t=t.toLowerCase();return /\b(pet|dog|cat|puppy|kitten|parrot|bird|fish|aquarium|hamster|rabbit|reptile|litter|kibble|leash|pellets?)\b/.test(t)?'pet':/\b(drill|tools?|paint|lumber|hardware|faucet|plumbing|garden|mulch|screws?|hammer|ladder|home improvement)\b/.test(t)?'home':/\b(tv|laptop|phone|iphone|headphones?|earbuds|airpods|camera|charger|monitor|tablet|ipad|console|electronics?)\b/.test(t)?'electronics':/\b(medicine|vitamins?|tylenol|advil|ibuprofen|allergy|pharmac\w*|bandages?|cough|cold|prescription|health)\b/.test(t)?'pharmacy':/\b(car|motor oil|oil filter|brake|tires?|wiper|battery|spark plugs?|auto\w*)\b/.test(t)?'auto':''}
 // leave the app only after the spoken line has finished (no chopped voice). url may be a Promise (e.g. resolving a video id).
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
-function afterSpeech(){return Promise.race([window._speechDone||Promise.resolve(),sleep(8000)])}
-function openNow(you,msg,url){const short=msg.length<=90;
+function afterSpeech(){return Promise.race([window._speechDone||Promise.resolve(),sleep(Math.max(8000,speakUntil-Date.now()+1500))])}
+// ---- save alarms / timers / reminders to the phone itself (fires when OtoCue is closed)
+const isAndroid=()=>/Android/i.test(navigator.userAgent);
+const DAYS={sunday:'SU',monday:'MO',tuesday:'TU',wednesday:'WE',thursday:'TH',friday:'FR',saturday:'SA'};
+function parseRepeat(s){let m,rule='',label='';
+ if(m=s.match(/\s*,?\s*\b(?:every\s*day|everyday|daily|each day|every (?:morning|night|evening|afternoon))\b/i)){rule='FREQ=DAILY';label='every day'}
+ else if(m=s.match(/\s*,?\s*\b(?:every weekday|on weekdays|weekdays)\b/i)){rule='FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR';label='every weekday'}
+ else if(m=s.match(/\s*,?\s*\bevery\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)s?\b/i)||s.match(/\s*,?\s*\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)s\b/i)){rule='FREQ=WEEKLY;BYDAY='+DAYS[m[1].toLowerCase()];label='every '+m[1][0].toUpperCase()+m[1].slice(1).toLowerCase()}
+ else if(m=s.match(/\s*,?\s*\b(?:every week|weekly)\b/i)){rule='FREQ=WEEKLY';label='every week'}
+ if(!m)return{s,rule:'',label:''};
+ // keep "morning/night" as an am/pm hint for bare times
+ const hint=/morning/i.test(m[0])?' am':/(night|evening|afternoon)/i.test(m[0])?' pm':'';let out=(s.slice(0,m.index)+' '+s.slice(m.index+m[0].length)).replace(/\s+/g,' ').trim();
+ if(hint&&/\b\d{1,2}(?::\d{2})?$/.test(out))out+=hint;return{s:out,rule,label}}
+const zt=d=>new Date(d).toISOString().replace(/[-:]/g,'').replace(/\.\d{3}/,'');
+function gcalUrl(title,start,mins,rule,details){return 'https://calendar.google.com/calendar/render?action=TEMPLATE&text='+encodeURIComponent(title)+'&dates='+zt(start)+'/'+zt(start+mins*60e3)+(rule?'&recur='+encodeURIComponent('RRULE:'+rule):'')+'&ctz='+encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC')+'&details='+encodeURIComponent(details||'Set by OtoCue')}
+function icsUrl(title,start,mins,rule){const esc=t=>t.replace(/[,;\\]/g,m=>'\\'+m);const ics=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//OtoCue//EN','BEGIN:VEVENT','UID:'+Date.now()+'@otocue','DTSTAMP:'+zt(Date.now()),'DTSTART:'+zt(start),'DTEND:'+zt(start+mins*60e3),...(rule?['RRULE:'+rule]:[]),'SUMMARY:'+esc(title),'BEGIN:VALARM','ACTION:DISPLAY','DESCRIPTION:'+esc(title),'TRIGGER:PT0M','END:VALARM','END:VEVENT','END:VCALENDAR'].join('\r\n');return URL.createObjectURL(new Blob([ics],{type:'text/calendar'}))}
+// Chrome intent: URLs. Note: Chrome only resolves intents whose activity is BROWSABLE, and extras can't carry int arrays (no repeat days).
+function alarmIntent(when,msg,fallback){const d=new Date(when);return 'intent:#Intent;action=android.intent.action.SET_ALARM;i.android.intent.extra.alarm.HOUR='+d.getHours()+';i.android.intent.extra.alarm.MINUTES='+d.getMinutes()+';S.android.intent.extra.alarm.MESSAGE='+encodeURIComponent(msg||'OtoCue')+';B.android.intent.extra.alarm.SKIP_UI=true;'+(fallback?'S.browser_fallback_url='+encodeURIComponent(fallback)+';':'')+'end'}
+function timerIntent(sec,msg,fallback){return 'intent:#Intent;action=android.intent.action.SET_TIMER;i.android.intent.extra.alarm.LENGTH='+sec+';S.android.intent.extra.alarm.MESSAGE='+encodeURIComponent(msg||'OtoCue timer')+';B.android.intent.extra.alarm.SKIP_UI=true;'+(fallback?'S.browser_fallback_url='+encodeURIComponent(fallback)+';':'')+'end'}
+// kind: 'alarm' | 'timer' | 'reminder'
+function phonePlan(kind,o){const title=kind==='timer'?`⏱ ${o.label} timer`:kind==='alarm'?('⏰ '+(o.song?'Alarm: '+o.song:'Alarm')):'🔔 '+o.text,start=kind==='timer'?Date.now()+o.sec*1000:o.when,mins=kind==='timer'?1:15;
+ const g=gcalUrl(title,start,mins,o.rule,'Reminder from OtoCue'),ics=icsUrl(title,start,mins,o.rule);let auto;
+ if(kind==='reminder')auto=g;else if(isAndroid())auto=kind==='timer'?timerIntent(o.sec,title,g):alarmIntent(start,title,g);else auto=g;
+ return{auto,g,ics,title,clock:kind==='timer'?timerIntent(o.sec,title,g):alarmIntent(start,title,g)}}
+function phoneCard(p){let c=document.getElementById('phoneCard');if(!c){c=document.createElement('div');c.id='phoneCard';c.className='card glass calcard';$('#timers').after(c)}
+ c.innerHTML='<b></b>'+(isAndroid()?'<a class="btn" id="pcClock">⏰ Save in Clock app</a>':'')+'<a class="btn2" id="pcG" target="_blank" rel="noopener">📅 Google Calendar</a><a class="btn2" id="pcIcs">⬇ Calendar file (.ics)</a><button class="btn2" id="pcX" style="width:100%;margin-top:8px">✕ Close</button>';
+ c.querySelector('b').textContent='Save to your phone: '+p.title;if(isAndroid())c.querySelector('#pcClock').href=p.clock;c.querySelector('#pcG').href=p.g;const a=c.querySelector('#pcIcs');a.href=p.ics;a.download='otocue-reminder.ics';c.querySelector('#pcX').onclick=()=>c.remove()}
+function savePhone(kind,o){const p=phonePlan(kind,o);phoneCard(p);window.OtoCue.lastPhone=p;openNow(null,'',p.auto);return p}
+function openNow(you,msg,url){const short=msg.length<=170;
  if(you!==null){if(short)say(you,msg);else{status('');$('#you').textContent=you;$('#out').textContent=msg;lastAnswer=msg;window._speechDone=Promise.resolve()}}
  const fb=u=>{let b=$('#tapOpen');if(!b){b=document.createElement('a');b.id='tapOpen';b.className='btn';b.target='_blank';b.rel='noopener';$('#timers').before(b)}b.href=u;b.textContent='▶ Tap to '+(/^tel:/.test(u)?'call':/^(sms|mailto):/.test(u)?'send':/Playing/.test(msg)?'play':'open');b.onclick=()=>setTimeout(()=>b.remove(),300);b.hidden=false;window.OtoCue.fallback=true};
  const urlP=Promise.resolve(url).catch(()=>null);
- return Promise.all([you!==null&&short?afterSpeech():Promise.resolve(),urlP,sleep(600)]).then(([,u])=>{u=u||(typeof url==='string'?url:'');if(!u)return;window.OtoCue.lastUrl=u;window.OtoCue.openedAt=Date.now();
+ return Promise.all([afterSpeech(),urlP,sleep(600)]).then(([,u])=>{u=u||(typeof url==='string'?url:'');if(!u)return;window.OtoCue.lastUrl=u;window.OtoCue.openedAt=Date.now();
   const tb=$('#tapOpen');if(tb)tb.remove();
   if(/^https?:/.test(u)&&navigator.userActivation&&navigator.userActivation.isActive){const w=window.open(u,'_blank');if(w)return}
   fb(u);location.href=u})}
@@ -346,7 +373,7 @@ let timers=0;function startTimer(you,n,unit){const ms=n*(/^h/.test(unit)?3600e3:
  const el=document.createElement('div');el.className='timer glass';$('#timers').appendChild(el);const end=Date.now()+ms;
  const tick=()=>{const s=Math.max(0,Math.round((end-Date.now())/1000));el.textContent=`⏱ ${lbl}: ${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
   if(s<=0){clearInterval(iv);window._tmr=(window._tmr||[]).filter(x=>x.iv!==iv);el.textContent=`⏰ ${lbl} timer done!`;el.classList.add('done');try{navigator.vibrate&&navigator.vibrate([400,200,400,200,400])}catch(_){}speak(`Your ${lbl} timer is done.`);setTimeout(()=>el.remove(),15000)}};
- const iv=setInterval(tick,1000);(window._tmr=window._tmr||[]).push({el,iv,end,lbl});tick();say(you,`Timer set for ${lbl}.`)}
+ const iv=setInterval(tick,1000);(window._tmr=window._tmr||[]).push({el,iv,end,lbl});tick();say(you,`Timer set for ${lbl}.`);savePhone('timer',{sec:Math.round(ms/1000),label:lbl})}
 const NUMW={a:1,an:1,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,fifteen:15,twenty:20,thirty:30,forty:40,'forty five':45,sixty:60};
 function parseCmd(raw){const t=raw.trim().replace(/[.?!]+$/,''),l=t.toLowerCase();let m;
  if(m=l.match(/^(?:please\s+)?(?:buy|order|find|get|search|shop for|look for|look up)\s+(?:me\s+)?(.+?)\s+(?:on|at|from)\s+(amazon|walmart|target|petco|petsmart|chewy|home depot|lowe'?s|best buy|cvs|walgreens|autozone)(?:\.com)?$/))return{k:'store',q:m[1].replace(/^(?:some|a|an|the)\s+/,''),st:m[2].replace(/'/g,'').replace(' ','')};
@@ -425,27 +452,31 @@ function pw(s){let m;
   if(!ap&&h<12){if(d<=Date.now())d.setHours(h+12)}if(d<=Date.now())d.setDate(d.getDate()+1);return d.getTime()}
  return null}
 const cleanSong=s=>(s||'').trim().replace(/^(?:the song\s+)?/i,'').replace(/[.?!]+$/,'');
-function parseAlarm(raw){const t=raw.trim().replace(/[.?!]+$/,'');let m;
+function parseAlarm(raw){const R=parseRepeat(raw.trim().replace(/[.?!]+$/,'')),t=R.s;let m;
  if(!(m=t.match(/^(?:please\s+)?(?:wake me(?:\s+up)?|set (?:an?\s+|my\s+)?alarm|alarm)\s*(.*)$/i)))return null;
  let rest=m[1].trim(),song='',when=null;
  const sm=rest.match(/\s*\b(?:to|with|playing)\s+(?!\d)(.+)$/i);if(sm){const before=rest.slice(0,sm.index).trim();const w=before?parseWhen(before.replace(/^(for|at|in)\s+/i,x=>/in/i.test(x)?'in ':'')):null;if(!before||w){song=cleanSong(sm[1]);rest=before}}
  if(rest)when=parseWhen(rest);
  if(rest&&!when)return{k:'alarm',bad:rest,song};
- return{k:'alarm',when,song}}
-function add(you,when,song,text){const a=load();a.push({id:Date.now()+''+Math.random().toString(36).slice(2,6),t:when,song,text});saveA(a);
- if(text)return say(you,`Reminder set for ${fmt(when)}: ${text}. Keep OtoCue open with the screen on.`);say(you,`Alarm set for ${fmt(when)}${song?' with '+song:''}. Keep OtoCue open with the screen on.`)}
+ return{k:'alarm',when,song,rule:R.rule,label:R.label}}
+function add(you,when,song,text,rule,label,msg){if(rule&&/BYDAY=/.test(rule)){const ok=d=>rule.split('BYDAY=')[1].split(',').includes(['SU','MO','TU','WE','TH','FR','SA'][d.getDay()]);const d=new Date(when);while(!ok(d))d.setDate(d.getDate()+1);when=d.getTime()}const a=load();a.push({id:Date.now()+''+Math.random().toString(36).slice(2,6),t:when,song,text,rule,label});saveA(a);
+ const at=(label?fmtT(when).replace(' tomorrow',''):fmtT(when))+(label?' '+label:''),tail=' Saving it to your phone so it rings even if OtoCue is closed.';
+ say(you,msg?msg+' Saved to your phone too.':text?`Reminder set for ${at}.${tail}`:`Alarm set for ${at}${song?' with '+song:''}.${tail}`);
+ savePhone(text?'reminder':'alarm',{when,text,song,rule})}
+const fmtT=t=>{const d=new Date(t),tm=d.toLocaleTimeString('en-US',{hour:'numeric',minute:d.getMinutes()?'2-digit':undefined}),tom=new Date();tom.setDate(tom.getDate()+1);return d.toDateString()===tom.toDateString()&&!0?tm+' tomorrow':tm};
+function nextRep(t,rule){const d=new Date(t);do{d.setDate(d.getDate()+1)}while(/BYDAY=/.test(rule)&&!rule.split('BYDAY=')[1].split(',').includes(['SU','MO','TU','WE','TH','FR','SA'][d.getDay()]));return d.getTime()}
 async function handle(text){
  if(pend){const w=parseWhen(text.replace(/^(?:at|for)\s+/i,''));if(w){const s=pend.song;pend=null;add(text,w,s);return true}
   if(/^(cancel|never ?mind|no)\b/i.test(text)){pend=null;say(text,'Okay, no alarm.');return true}pend=null}
  const c=parseAlarm(text);if(!c)return false;
- if(c.when){add(text,c.when,c.song);return true}
+ if(c.when){add(text,c.when,c.song,'',c.rule,c.label);return true}
  pend={song:c.song};say(text,c.bad?`Sorry, I didn't understand the time “${c.bad}”. What time should I wake you?`:'What time? Say a time like “7 AM” or “in 30 minutes”.');
  if(!window._typed)setTimeout(()=>{if(pend&&SR&&!busy)doAsk()},2500);return true}
 const orig=localCmd;localCmd=async t=>(await handle(t))||orig(t);
 // UI
 const box=document.createElement('div');box.id='alarms';$('#timers').before(box);
 function render(){const a=load().sort((x,y)=>x.t-y.t);box.innerHTML='';a.forEach(x=>{const el=document.createElement('div');el.className='timer glass alarm';
- el.innerHTML='<span></span><button class="btn2 acx" aria-label="Cancel alarm">✕</button>';el.firstChild.textContent=x.text?`🔔 ${fmt(x.t)} · ${x.text}`:`⏰ ${fmt(x.t)}${x.song?' · '+x.song:''}`;
+ el.innerHTML='<span></span><button class="btn2 acx" aria-label="Cancel alarm">✕</button>';el.firstChild.textContent=(x.text?`🔔 ${fmt(x.t)} · ${x.text}`:`⏰ ${fmt(x.t)}${x.song?' · '+x.song:''}`)+(x.label?' · '+x.label:'');
  el.querySelector('button').onclick=()=>{saveA(load().filter(y=>y.id!==x.id));status('Alarm cancelled.')};box.appendChild(el)})}
 async function lock(){const has=load().length>0||ringing||wakeOn;try{if(has&&!wl&&'wakeLock' in navigator&&!document.hidden){wl=await navigator.wakeLock.request('screen');wl.addEventListener('release',()=>{wl=null})}else if(!has&&wl){wl.release();wl=null}}catch(_){}}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)lock()});
@@ -460,7 +491,7 @@ function fire(x){if(ringing)return;ringing=x;speechSynthesis&&hush();
  let n=0;beep();if(x.text)setTimeout(()=>speak('Reminder: '+x.text),900);beepT=setInterval(()=>{n++;if(x.text?n%8===0:(!x.song||n<6))beep();try{navigator.vibrate&&navigator.vibrate([500,300,500])}catch(_){}},1200);
  $('#alarmStop').onclick=()=>{stopRing();status('Alarm stopped.')};
  $('#alarmSnooze').onclick=()=>{const t=Date.now()+300e3;stopRing();const a=load();a.push({id:'s'+t,t,song:x.song});saveA(a);status('Snoozed until '+fmt(t)+'.')}}
-setInterval(()=>{const a=load(),now=Date.now(),due=a.filter(x=>x.t<=now);if(due.length){saveA(a.filter(x=>x.t>now));fire(due[0])}else if(a.some(x=>x.t-now<120e3))render()},1000);
+setInterval(()=>{const a=load(),now=Date.now(),due=a.filter(x=>x.t<=now);if(due.length){const keep=a.filter(x=>x.t>now);due.filter(x=>x.rule).forEach(x=>{let t=x.t;while(t<=now)t=nextRep(t,x.rule);keep.push({...x,t})});saveA(keep);fire(due[0])}else if(a.some(x=>x.t-now<120e3))render()},1000);
 render();lock();
 Object.assign(window.OtoCue,{parseAlarm,parseWhen,stopAlarm:stopRing,addAlarm:add,lock,fireAlarm:fire,loadAlarms:load,saveAlarms:saveA,ringing:()=>ringing,fmtTime:fmt});
 })();
@@ -469,10 +500,10 @@ Object.assign(window.OtoCue,{parseAlarm,parseWhen,stopAlarm:stopRing,addAlarm:ad
 (function(){
 const O=window.OtoCue,pw=O.parseWhen;
 // reminders: "remind me to X at/in T" or "remind me at/in T to X"
-function parseReminder(raw){const t=raw.trim().replace(/[.!]+$/,'');let m=t.match(/^(?:please\s+)?(?:remind me|set (?:a\s+)?reminder)\s+(?:to\s+|about\s+|that\s+)?(.+)$/i);if(!m)return null;const r=m[1];
- let a=r.match(/^((?:in|at|tomorrow|on)\b.+?)\s+(?:to|about|that)\s+(.+)$/i);if(a){const w=pw(a[1]);if(w)return{when:w,text:a[2]}}
- const ws=r.split(/\s+/);for(let i=1;i<ws.length;i++){const tail=ws.slice(i).join(' ');if(/^(in|at|tomorrow)\b/i.test(tail)||/from now$/i.test(tail)){const w=pw(tail);if(w)return{when:w,text:ws.slice(0,i).join(' ').replace(/^to\s+/i,'')}}}
- return{when:null,text:r}}
+function parseReminder(raw){const R=parseRepeat(raw.trim().replace(/[.!]+$/,'')),t=R.s;let m=t.match(/^(?:please\s+)?(?:remind me|set (?:a\s+)?reminder)\s+(?:to\s+|about\s+|that\s+)?(.+)$/i);if(!m)return null;const r=m[1];
+ let a=r.match(/^((?:in|at|tomorrow|on)\b.+?)\s+(?:to|about|that)\s+(.+)$/i);if(a){const w=pw(a[1]);if(w)return{when:w,text:a[2],rule:R.rule,label:R.label}}
+ const ws=r.split(/\s+/);for(let i=1;i<ws.length;i++){const tail=ws.slice(i).join(' ');if(/^(in|at|tomorrow)\b/i.test(tail)||/from now$/i.test(tail)){const w=pw(tail);if(w)return{when:w,text:ws.slice(0,i).join(' ').replace(/^to\s+/i,''),rule:R.rule,label:R.label}}}
+ return{when:null,text:r,rule:R.rule,label:R.label}}
 // calendar: "add <event> to my calendar <time>" / "add <event> <time> to my calendar"
 function parseCal(raw){const t=raw.trim().replace(/[.!]+$/,'');let m=t.match(/^(?:please\s+)?(?:add|put|schedule)\s+(.+?)\s+(?:to|on|in)\s+(?:my\s+)?calendar\s*(.*)$/i);if(!m)return null;
  let ev=m[1],when=m[2].replace(/^(for|at|on)\s+/i,'');let w=when?pw(when):null;
@@ -486,10 +517,52 @@ function calCard(you,ev,start){const end=start+3600e3,ics=['BEGIN:VCALENDAR','VE
  c.querySelector('b').textContent=`${ev} — ${new Date(start).toLocaleString('en-US',{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}`;
  const a=$('#calIcs');a.href=url;a.download=ev.replace(/[^\w ]+/g,'').slice(0,40)+'.ics';$('#calG').href=g;$('#calX').onclick=()=>c.remove();try{a.click()}catch(_){}
  say(you,`Event ready: ${ev}, ${new Date(start).toLocaleString('en-US',{weekday:'long',hour:'numeric',minute:'2-digit'})}. Tap Add to calendar to save it.`)}
+// ---- natural-language dates: today/tomorrow/next <weekday>/on <weekday>/<month day>/in N days + morning/afternoon/evening, offsets
+const MONTHS=['january','february','march','april','may','june','july','august','september','october','november','december'],WD=['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+function nlDate(s){s=' '+s.toLowerCase().replace(/[,.!?]/g,' ').replace(/\s+/g,' ')+' ';const now=new Date();let d=null,h=null,mi=0,m;
+ const mon='(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+ const mIdx=x=>MONTHS.findIndex(n=>n.startsWith(x.slice(0,3)));
+ if(m=s.match(new RegExp(' '+mon+' (\\d{1,2})(?:st|nd|rd|th)? '))||(m=s.match(new RegExp(' (?:the )?(\\d{1,2})(?:st|nd|rd|th)? of '+mon+' ')))){const mo=isNaN(+m[1])?mIdx(m[1]):mIdx(m[2]),day=+(isNaN(+m[1])?m[2]:m[1]);d=new Date(now.getFullYear(),mo,day);if(d<new Date(now.getFullYear(),now.getMonth(),now.getDate()))d.setFullYear(d.getFullYear()+1)}
+ else if(/ (today|tonight) /.test(s))d=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+ else if(/ (tomorrow|tmrw) /.test(s))d=new Date(now.getFullYear(),now.getMonth(),now.getDate()+1);
+ else if(m=s.match(/ in (\d+|a|one|two|three|four|five|six|seven) (day|week)s? /)){const n=+m[1]||{a:1,one:1,two:2,three:3,four:4,five:5,six:6,seven:7}[m[1]];d=new Date(now.getFullYear(),now.getMonth(),now.getDate()+n*(m[2]==='week'?7:1))}
+ else if(m=s.match(/ next week(?: on)? (sunday|monday|tuesday|wednesday|thursday|friday|saturday) /)||s.match(/ next (sunday|monday|tuesday|wednesday|thursday|friday|saturday) /)){const t=WD.indexOf(m[1]),mon0=new Date(now.getFullYear(),now.getMonth(),now.getDate()+((8-now.getDay())%7||7));d=new Date(mon0);d.setDate(mon0.getDate()+((t+6)%7))}
+ else if(m=s.match(/ (?:on |this )?(sunday|monday|tuesday|wednesday|thursday|friday|saturday) /)){const t=WD.indexOf(m[1]);d=new Date(now.getFullYear(),now.getMonth(),now.getDate()+(((t-now.getDay())+7)%7||7))}
+ else if(/ next week /.test(s)){d=new Date(now.getFullYear(),now.getMonth(),now.getDate()+((8-now.getDay())%7||7))}
+ if(m=s.match(/ (?:at )?(\d{1,2})(?::(\d{2}))? ?(am|pm|a m|p m) /)){h=+m[1]%12+(m[3][0]==='p'?12:0);mi=+(m[2]||0)}else if(m=s.match(/ at (\d{1,2})(?::(\d{2}))? /)){h=+m[1];mi=+(m[2]||0);if(h<8)h+=12}
+ else if(/ noon /.test(s))h=12;else if(/ midnight /.test(s))h=0;else if(/ morning /.test(s))h=9;else if(/ afternoon /.test(s))h=14;else if(/ evening /.test(s))h=18;else if(/ (tonight|night) /.test(s))h=20;
+ if(!d&&h!==null){d=new Date(now.getFullYear(),now.getMonth(),now.getDate());d.setHours(h,mi);if(d<=now)d.setDate(d.getDate()+1);return{t:d.getTime(),timeGiven:true}}
+ if(!d)return null;d.setHours(h===null?9:h,mi,0,0);return{t:d.getTime(),timeGiven:h!==null}}
+function nlOffset(s){let m;s=s.toLowerCase();if(/\b(?:the |a )?day before\b/.test(s))return 1440;if(m=s.match(/\b(\d+|two|three|four|five|six|seven) days? before\b/))return(+m[1]||{two:2,three:3,four:4,five:5,six:6,seven:7}[m[1]])*1440;
+ if(/\b(?:a|one) week before\b/.test(s))return 10080;if(m=s.match(/\b(\d+|an|one|two) hours? before\b/))return(+m[1]||{an:1,one:1,two:2}[m[1]])*60;return 0}
+const yourify=t=>t.replace(/\bmy\b/gi,'your').replace(/\bI\b/g,'you').replace(/\bme\b/gi,'you');
+const longDate=t=>{const d=new Date(t);return d.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})+' at '+d.toLocaleTimeString('en-US',{hour:'numeric',minute:d.getMinutes()?'2-digit':undefined})};
+function events(){try{return JSON.parse(localStorage.getItem('otocue_events')||'[]')}catch(_){return[]}}
+function saveEvent(name,t){const e=events().filter(x=>x.name.toLowerCase()!==name.toLowerCase());e.push({name,t});localStorage.setItem('otocue_events',JSON.stringify(e))}
+// "my anniversary is next week on Friday, remind me to get flowers" / "my mom's birthday is March 3rd, remind me the day before" / "remind me to call the dentist tomorrow morning"
+function nlReminder(raw){let t=raw.trim().replace(/^(?:hey\s+)?cue\s*,?\s*/i,'').replace(/[.!]+$/,'');let m,ev=null,evT=null;
+ if(m=t.match(/^(my\s+.+?|.+?'s\s+.+?)\s+(?:is|are|was)\s+(.+?)\s*(?:,|\band\b|\bso\b)\s*(?:please\s+)?(remind me\b.*)$/i)){const d=nlDate(m[2]);if(!d)return null;ev=m[1].trim();evT=d.t;t=m[3]}
+ const r=t.match(/^remind me\s*(.*)$/i);if(!r)return null;let rest=r[1];let off=nlOffset(rest);rest=rest.replace(/\b(?:the |a |one )?(?:day|week)\s+before\b|\b(?:\d+|two|three|four|five|six|seven|an|one)\s+(?:days?|hours?)\s+before\b|\b(?:of it|about it)\b/gi,' ').replace(/\s+/g,' ').trim();
+ const R=parseRepeat(rest);rest=R.s;let when;const offGiven=off>0;
+ if(evT!==null&&!offGiven&&!/\b(?:on the day|that day|day of|same day)\b/i.test(r[1])&&!(nlDate(rest)||{}).timeGiven){const d=new Date(evT);d.setDate(d.getDate()-1);if(d>Date.now()){off=1440}}
+ if(evT!==null){const own=nlDate(rest);when=evT-off*60e3;if(own&&own.timeGiven){const d=new Date(when),o=new Date(own.t);d.setHours(o.getHours(),o.getMinutes());when=d.getTime()}else if(off>=1440){const d=new Date(when);d.setHours(9,0,0,0);when=d.getTime()}}
+ else{const d=nlDate(rest);if(!d)return null;when=d.t-off*60e3}
+ let task=rest.replace(/^(?:to|about|that)\s+/i,'').replace(/\s*\b(?:today|tonight|tomorrow|tmrw|next week(?: on)?|next|this|on|in \d+ days?|in a week|at \d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}(?::\d{2})?\s*(?:am|pm)|noon|midnight|in the (?:morning|afternoon|evening)|morning|afternoon|evening|night|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]* \d{1,2}(?:st|nd|rd|th)?|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/gi,' ').replace(/\s+/g,' ').trim();
+ if(!task&&!ev)return null;const yearly=ev&&/birthday|anniversary|bday/i.test(ev);
+ return{when,task,ev,evT,off,rule:R.rule||(yearly?'FREQ=YEARLY':''),label:R.label||(yearly?'every year':'')}}
+async function geminiReminder(text){if(!S.key)return null;try{const now=new Date();const a=await geminiRaw([{text:`Now is ${now.toString()}. Extract the reminder from: "${text}". Reply ONLY JSON: {"title":"what to remind","datetime":"ISO 8601 local time of the reminder","event":"event name or empty","event_datetime":"ISO or empty","recur":"RRULE like FREQ=DAILY or empty"}`}],'You output only compact JSON.',undefined,[]);
+ const j=JSON.parse(a.replace(/^[^{]*/,'').replace(/[^}]*$/,''));const t=Date.parse(j.datetime);if(!t||!j.title)return null;return{when:t,task:j.title,ev:j.event||null,evT:j.event_datetime?Date.parse(j.event_datetime):null,off:0,rule:j.recur||'',label:j.recur?'repeating':''}}catch(_){return null}}
+function doNL(text,n){if(n.ev&&n.evT)saveEvent(n.ev.replace(/^my\s+/i,''),n.evT);const what=n.task?'to '+yourify(n.task):'about '+yourify(n.ev);
+ const rel=n.ev?(n.off>=1440?`, ${n.off===1440?'the day':Math.round(n.off/1440)+' days'} before ${yourify(n.ev)}`:n.off?`, ${Math.round(n.off/60)} hour${n.off>60?'s':''} before ${yourify(n.ev)}`:''):'';
+ O.addAlarm(text,n.when,'',n.task||yourify(n.ev),n.rule,n.label,`Got it. I'll remind you ${what} on ${longDate(n.when)}${rel}${n.label?', '+n.label:''}.`)}
 let remPend=null;
 const prev=localCmd;localCmd=async text=>{
- if(remPend){const w=pw(text.replace(/^(?:at|for)\s+/i,''));const p=remPend;remPend=null;if(w){O.addAlarm(text,w,'',p.text);return true}}
- const r=parseReminder(text);if(r){if(r.when)O.addAlarm(text,r.when,'',r.text);else{remPend=r;say(text,`When should I remind you to ${r.text}?`)}return true}
+ if(remPend){const w=pw(text.replace(/^(?:at|for)\s+/i,''));const p=remPend;remPend=null;if(w){O.addAlarm(text,w,'',p.text,p.rule,p.label);return true}}
+ {const qm=text.trim().match(/^(?:hey\s+cue\s*,?\s*)?when(?:'s| is| was)\s+(?:my\s+)?(.+?)\??$/i);if(qm){const k=qm[1].toLowerCase().replace(/^the\s+/,''),e=events().find(x=>x.name.toLowerCase().replace(/^my\s+/,'')===k||x.name.toLowerCase().includes(k)||k.includes(x.name.toLowerCase()));if(e){say(text,`Your ${e.name.replace(/^my\s+/i,'')} is on ${new Date(e.t).toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:new Date(e.t).getFullYear()!==new Date().getFullYear()?'numeric':undefined})}.`);return true}}}
+ if(/\bremind me\b/i.test(text)){const simple=parseReminder(text.replace(/^(?:hey\s+)?cue\s*,?\s*/i,''));const nl=(simple&&simple.when&&!/\b(before|morning|afternoon|evening|next|on \w+day|january|february|march|april|may|june|july|august|september|october|november|december)\b/i.test(text))?null:nlReminder(text);
+  if(nl){doNL(text,nl);return true}
+  if(!(simple&&simple.when)&&/\b(today|tomorrow|tonight|next|week|day|before|monday|tuesday|wednesday|thursday|friday|saturday|sunday|morning|evening|afternoon|\d)/i.test(text)){status('Working out the date…');const g=await geminiReminder(text);status('');if(g){doNL(text,g);return true}}}
+ const r=parseReminder(text.replace(/^(?:hey\s+)?cue\s*,?\s*/i,''));if(r){if(r.when)O.addAlarm(text,r.when,'',r.text,r.rule,r.label);else{remPend=r;say(text,`When should I remind you to ${r.text}?`)}return true}
  const c=parseCal(text);if(c){if(c.when)calCard(text,c.ev,c.when);else say(text,`What time is “${c.ev}”? Say e.g. “add ${c.ev} to my calendar tomorrow at 3pm”.`);return true}
  return prev(text)};
 Object.assign(O,{parseReminder,parseCal});
