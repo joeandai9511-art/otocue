@@ -196,16 +196,20 @@ $('#msgBtn').onclick=()=>{list();sel(null);$('#mNum').value='';$('#mText').value
 window.OtoCue.openMessage=(p,t)=>{list();sel(p.tel,p.name);$('#mNum').value='';$('#mText').value=t||'';D.showModal()};
 $('#mClose').onclick=()=>D.close();
 $('#mLang').value=msgLang();$('#mLang').onchange=e=>localStorage.setItem('otocue_msglang',e.target.value);
-$('#mAsk').onclick=async()=>{if(busy)return;const b=$('#mAsk'),lbl=b.textContent;b.textContent='🎙 Listening…';busy=true;let h;try{h=await listen({ms:SR?0:7000})}catch(e){$('#mTo').textContent=e.message}finally{busy=false;b.textContent=lbl}
- const t=((h&&h.text)||'').trim().replace(/[.!?]+$/,'');if(!t){$('#mTo').textContent='Didn\'t catch that. Tap Ask and try again.';return}
- const r=t.replace(/^(?:please\s+)?(?:send\s+(?:a\s+)?(?:text|message|sms)\s+(?:to\s+)?|text\s+|message\s+|tell\s+)/i,'').replace(/^([^,]{1,30}),\s*/,'$1 ');
- const c=parseCmd(/^(?:call|phone|dial|ring)\s/i.test(r)&&!/,/.test(t)?r:'text '+r);D.close();await localCmd(c&&c.k==='call'?r:'text '+r)};
+function runMsgCommand(t){t=(t||'').trim().replace(/[.!?]+$/,'');const r=t.replace(/^(?:please\s+)?(?:send\s+(?:a\s+)?(?:text|message|sms)\s+(?:to\s+)?|text\s+|message\s+|tell\s+)/i,'').replace(/^([^,]{1,30}),\s*/,'$1 ');
+ const isCall=/^(?:call|phone|dial|ring)\s/i.test(r)&&!/,/.test(t);D.close();return localCmd(isCall?r:'text '+r)}
+// Ask in the modal: same start path as the main Ask (listen → listenSR → recognition.start), called synchronously inside the tap
+$('#mAsk').onclick=()=>{const b=$('#mAsk');if(b.classList.contains('rec')){stopFn&&stopFn();return}
+ pauseWake();try{curRec&&curRec.abort()}catch(_){}speechSynthesis.cancel();const lbl='🎙 Ask — say “text Pops I’m on my way”';b.classList.add('rec');b.textContent='🎙 Listening… speak now (tap to stop)';$('#mTo').textContent='Listening…';busy=true;
+ listen({ms:SR?0:7000}).then(async h=>{busy=false;b.classList.remove('rec');b.textContent=lbl;const t=((h&&h.text)||'').trim();if(!t){$('#mTo').textContent='Didn\'t catch that. Tap Ask and try again.';return}$('#mTo').textContent='Heard: '+t;await runMsgCommand(t)})
+  .catch(e=>{busy=false;b.classList.remove('rec');b.textContent=lbl;$('#mTo').textContent=e.message||'Mic error'}).finally(()=>{if(wakeOn)setTimeout(startWake,500)})};
 $('#mNum').oninput=e=>sel(e.target.value.trim()||null);
 $('#mPick').onclick=async()=>{if(!('contacts' in navigator&&'select' in navigator.contacts)){$('#mTo').textContent='Phone picker needs Chrome on Android — type the number instead.';$('#mNum').focus();return}
  try{const r=await navigator.contacts.select(['name','tel'],{multiple:false});const x=r[0];if(x&&x.tel&&x.tel[0])sel(x.tel[0],(x.name||[])[0])}catch(e){$('#mTo').textContent='Contacts: '+e.message}};
 $('#mMic').onclick=async()=>{if(busy)return;const b=$('#mMic');b.textContent='🎙 Listening…';
  try{const h=await listen({ms:SR?0:8000});if(h.text)$('#mText').value=(($('#mText').value+' ')+h.text).trim();else if(h.audio)$('#mTo').textContent='Voice typing needs speech recognition — please type the message.'}catch(e){$('#mTo').textContent=e.message}finally{b.textContent='🎙 Speak'}};
 $('#mSend').onclick=async()=>{const n=(to||'').replace(/[^+\d]/g,'');let t=$('#mText').value.trim();
+ if(/^(?:text|message|tell|send\s+(?:a\s+)?(?:text|message))\s+\S/i.test(t)&&(!n||parseCmd(t)&&parseCmd(t).p)){await runMsgCommand(t);return}
  if(!n){$('#mTo').textContent='Choose a contact or enter a number.';return}if(!t){$('#mTo').textContent='Say or type a message.';return}
  const lg=msgLang();if(lg&&$('#mText').dataset.tr!==t){$('#mTo').textContent=`Translating to ${lg}…`;const r=await translateMsg(t,lg);if(r.ok){t=r.t;$('#mText').value=t;$('#mText').dataset.tr=t;$('#mTo').textContent=`Translated to ${lg}. Sending…`}else $('#mTo').textContent=`Couldn't translate, sending the original.`;await new Promise(r=>setTimeout(r,900))}
  buzz([10,30,10]);D.close();window.OtoCue.lastUrl=smsUrl(n,t);location.href=smsUrl(n,t)};
