@@ -133,9 +133,9 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{document.que
 $('#lang').innerHTML=LANGS.map(l=>`<option>${l}</option>`).join(''); $('#lang').value=localStorage.getItem('otocue_lang')||'Spanish';
 function fillVoices(){const vs=speechSynthesis.getVoices();$('#voice').innerHTML='<option value="">Default</option>'+vs.map(v=>`<option value="${v.name.replace(/"/g,'&quot;')}">${v.name} (${v.lang})</option>`).join('');$('#voice').value=S.voice}
 if('speechSynthesis' in window){fillVoices();speechSynthesis.onvoiceschanged=fillVoices}
-$('#setBtn').onclick=()=>{$('#key').value=S.key;$('#model').value=S.model;$('#rate').value=S.rate;$('#voice').value=S.voice;$('#dlg').showModal()};
+$('#setBtn').onclick=()=>{$('#cfmSet').checked=confirmOn();$('#key').value=S.key;$('#model').value=S.model;$('#rate').value=S.rate;$('#voice').value=S.voice;$('#dlg').showModal()};
 $('#close').onclick=()=>$('#dlg').close();
-$('#save').onclick=()=>{localStorage.setItem('otocue_key',$('#key').value.trim());localStorage.setItem('otocue_model',$('#model').value.trim()||DEF_MODEL);localStorage.setItem('otocue_voice',$('#voice').value);localStorage.setItem('otocue_rate',$('#rate').value);$('#dlg').close();status('Settings saved ✓');if(S.key)$('#out').textContent='Ready. Tap Ask.'};
+$('#save').onclick=()=>{localStorage.setItem('otocue_key',$('#key').value.trim());localStorage.setItem('otocue_model',$('#model').value.trim()||DEF_MODEL);localStorage.setItem('otocue_voice',$('#voice').value);localStorage.setItem('otocue_rate',$('#rate').value);localStorage.setItem('otocue_confirm',$('#cfmSet').checked?'1':'0');$('#dlg').close();status('Settings saved ✓');if(S.key)$('#out').textContent='Ready. Tap Ask.'};
 if(!S.key) setTimeout(()=>$('#setBtn').click(),400);
 if(localStorage.getItem('otocue_wake')){$('#wake').checked=true;wakeOn=true;}
 document.addEventListener('visibilitychange',()=>{document.hidden?pauseWake():startWake()});
@@ -218,7 +218,13 @@ function findContact(q){q=q.toLowerCase().replace(/^(my|the)\s+/,'').trim();cons
 function tzTime(tz){return new Date().toLocaleTimeString('en-US',{timeZone:tz,hour:'numeric',minute:'2-digit'})}
 function say(you,t){status('');show(you,t)}
 function sayNoContact(you,name){say(you,`I couldn't find “${name}” in your shared contacts. Tap 💬 Message to pick one or enter a number.`)}
-async function confirmRun(you,msg,url){show(you,msg+' Say yes or tap Confirm.');const box=$('#cfm');box.hidden=false;$('#cfmTxt').textContent=msg;
+const confirmOn=()=>localStorage.getItem('otocue_confirm')!=='0';
+// open a URL right away: new tab with a fresh user gesture, same tab otherwise; big tap fallback if blocked
+function openNow(you,msg,url){if(you!==null)say(you,msg);window.OtoCue.lastUrl=url;const web=/^https?:/.test(url),act=!navigator.userActivation||navigator.userActivation.isActive;
+ const fb=()=>{let b=$('#tapOpen');if(!b){b=document.createElement('a');b.id='tapOpen';b.className='btn';b.target='_blank';b.rel='noopener';$('#timers').before(b)}b.href=url;b.textContent='▶ Tap to '+(/^tel:/.test(url)?'call':/^(sms|mailto):/.test(url)?'send':/Playing/.test(msg)?'play':'open');b.onclick=()=>setTimeout(()=>b.remove(),300);b.hidden=false;window.OtoCue.fallback=true};
+ if(web&&act){const w=window.open(url,'_blank');if(!w)fb();return}
+ fb();setTimeout(()=>{location.href=url},web?700:0)}
+async function confirmRun(you,msg,url){if(!confirmOn()){openNow(you,msg,url);return}show(you,msg+' Say yes or tap Confirm.');const box=$('#cfm');box.hidden=false;$('#cfmTxt').textContent=msg;
  const r=await new Promise(res=>{let done=false;const fin=v=>{if(done)return;done=true;box.hidden=true;stopFn&&stopFn();res(v)};window._cfm=fin;
   $('#cfmYes').onclick=()=>fin(true);$('#cfmNo').onclick=()=>fin(false);
   const go=()=>{if(done)return;status('Listening for yes / no…');listen({ms:5000}).then(h=>{if(done)return;const t=(h.text||'').toLowerCase();
@@ -256,10 +262,10 @@ let localCmd=async function(text){const c=parseCmd(text);if(!c)return false;cons
    await confirmRun(you,`Texting ${p.name}: “${c.msg}”.`,'sms:'+p.tel.replace(/[^+\d]/g,'')+'?&body='+encodeURIComponent(c.msg));break}
   case 'email':{const p=c.c||findContact(c.who);if(!p||!p.email){p?say(you,`${p.name} has no email in your shared contacts.`):sayNoContact(you,c.who);break}
    await confirmRun(you,`Emailing ${p.name}${c.msg?': “'+c.msg+'”':''}.`,'mailto:'+p.email+'?body='+encodeURIComponent(c.msg||''));break}
-  case 'nav':await confirmRun(you,`Getting directions to ${c.q}.`,'https://www.google.com/maps/dir/?api=1&destination='+encodeURIComponent(c.q));break;
-  case 'search':await confirmRun(you,`Searching Google for ${c.q}.`,'https://www.google.com/search?q='+encodeURIComponent(c.q));break;
-  case 'play':await confirmRun(you,`Playing ${c.q} on ${c.on==='spotify'?'Spotify':'YouTube'}.`,c.on==='spotify'?'https://open.spotify.com/search/'+encodeURIComponent(c.q):'https://www.youtube.com/results?search_query='+encodeURIComponent(c.q));break;
-  case 'open':{const u=APPS[c.app],android=/Android/i.test(navigator.userAgent);await confirmRun(you,`Opening ${c.app[0].toUpperCase()+c.app.slice(1)}.`,u[0]);break}
+  case 'nav':openNow(you,`Getting directions to ${c.q}.`,'https://www.google.com/maps/dir/?api=1&destination='+encodeURIComponent(c.q));break;
+  case 'search':openNow(you,`Searching Google for ${c.q}.`,'https://www.google.com/search?q='+encodeURIComponent(c.q));break;
+  case 'play':openNow(you,`Playing ${c.q} on ${c.on==='spotify'?'Spotify':'YouTube'}.`,c.on==='spotify'?'https://open.spotify.com/search/'+encodeURIComponent(c.q):'https://www.youtube.com/results?search_query='+encodeURIComponent(c.q));break;
+  case 'open':{const u=APPS[c.app],android=/Android/i.test(navigator.userAgent);openNow(you,`Opening ${c.app[0].toUpperCase()+c.app.slice(1)}.`,u[0]);break}
   case 'timer':startTimer(you,c.n,c.unit);break;
   case 'time':say(you,`It's ${new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}.`);break;
   case 'tz':{const z=CITY[c.city];if(!z)return false;const n=c.city.replace(/\b\w/g,x=>x.toUpperCase());say(you,`It's ${tzTime(z)} in ${n} (${new Date().toLocaleDateString('en-US',{timeZone:z,weekday:'long'})}).`);break}
@@ -342,7 +348,7 @@ function calCard(you,ev,start){const end=start+3600e3,ics=['BEGIN:VCALENDAR','VE
  let c=$('#calCard');if(!c){c=document.createElement('div');c.id='calCard';c.className='card glass calcard';$('#timers').after(c)}
  c.innerHTML='<b></b><a class="btn" id="calIcs">📅 Add to calendar (.ics)</a><a class="btn2" id="calG" target="_blank" rel="noopener">Google Calendar</a><button class="btn2" id="calX" style="width:100%;margin-top:8px">✕ Close</button>';
  c.querySelector('b').textContent=`${ev} — ${new Date(start).toLocaleString('en-US',{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}`;
- const a=$('#calIcs');a.href=url;a.download=ev.replace(/[^\w ]+/g,'').slice(0,40)+'.ics';$('#calG').href=g;$('#calX').onclick=()=>c.remove();
+ const a=$('#calIcs');a.href=url;a.download=ev.replace(/[^\w ]+/g,'').slice(0,40)+'.ics';$('#calG').href=g;$('#calX').onclick=()=>c.remove();try{a.click()}catch(_){}
  say(you,`Event ready: ${ev}, ${new Date(start).toLocaleString('en-US',{weekday:'long',hour:'numeric',minute:'2-digit'})}. Tap Add to calendar to save it.`)}
 let remPend=null;
 const prev=localCmd;localCmd=async text=>{
@@ -431,7 +437,7 @@ async function doSocial(you,s){let text=s.last?lastAnswer:s.text;
  if(s.last&&!text){say(you,'There is no answer to share yet.');return}
  if(s.polish){status('Writing…');text=(await gemini([{text:`Write one short, catchy social media caption${s.net?' for '+NAME[s.net]:''} about: ${text||'my day'}. Include 1-3 fitting hashtags. Output only the caption.`}],'You write short social captions. Plain text only.')).trim()}
  if(!text){say(you,`What should I post${s.net?' to '+NAME[s.net]:''}? Say e.g. “post to ${s.net?NAME[s.net]:'X'} just landed in Paris”.`);return}
- status('');const box=$('#cfm'),where=s.net?NAME[s.net]:'…';$('#cfmTxt').textContent=`Share to ${where}: “${text}”`;box.hidden=false;
+ status('');if(!confirmOn()){const r=await shareNow(s.net,text);O.lastShare={net:s.net,text,r};say(you,`Sharing to ${s.net?NAME[s.net]:'…'}.`);return}const box=$('#cfm'),where=s.net?NAME[s.net]:'…';$('#cfmTxt').textContent=`Share to ${where}: “${text}”`;box.hidden=false;
  $('#out').textContent=`Ready to share to ${where}: “${text}”. Tap Confirm.`;
  await new Promise(res=>{const fin=async v=>{box.hidden=true;if(v){const r=await shareNow(s.net,text);O.lastShare={net:s.net,text,r}}else $('#out').textContent='Cancelled.';res()};$('#cfmYes').onclick=()=>fin(true);$('#cfmNo').onclick=()=>fin(false)})}
 const prev=localCmd;localCmd=async text=>{const s=parseSocial(text);if(s){await doSocial(text,s);return true}const e=parseEmail(text);if(e){await doEmail(text,e);return true}return prev(text)};

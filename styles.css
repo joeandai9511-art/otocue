@@ -76,3 +76,4 @@ body.wakeon[data-x] #wakeBadge{display:inline-block}
 .calcard a{display:block;text-align:center;text-decoration:none;margin-top:8px}
 .mlist .cx{flex:none;padding:4px 10px;background:none;border:0;color:var(--mu)}
 #toast{position:fixed;left:50%;top:16px;transform:translateX(-50%);z-index:70;padding:12px 18px;border-radius:999px;background:#2a1a08;border:1px solid #d4a53799;color:var(--c);font-weight:700;box-shadow:0 6px 20px #0008}#toast[hidden]{display:none}
+#tapOpen{display:block;text-align:center;text-decoration:none;font-size:22px;padding:18px;margin:10px 0}#tapOpen[hidden]{display:none}
