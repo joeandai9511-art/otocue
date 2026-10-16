@@ -58,13 +58,22 @@ async function gemini(parts,system=SYS,model,hist){
   if(e.quota&&e.retry){clearInterval(qT);let n=e.retry;qT=setInterval(()=>{n--;if(n<=0){clearInterval(qT);status('Quota should be back — try again.')}else if(!busy)status(`Gemini quota: try again in ${n}s`)},1000)}throw e}}
 const SYS='You are OtoCue, a concise AI assistant heard through an earpiece. Answer in 1-4 short spoken sentences, plain text, no markdown or lists. You cannot set alarms, timers, reminders, make calls, send texts or emails, or take any action on the device yourself; the app handles those only when the user uses command phrasing. Never claim you have done or set anything. If asked, say to use a command like "wake me up at 7 AM to <song>", "set an alarm for 6:30", "timer 5 minutes", "call Mom", "text Mom that I am on my way", "email Mom subject Dinner I will be late", "post to X <text>" or "share this".';
 
-function speak(text,lang){
- window._speechDone=Promise.resolve();if(!('speechSynthesis' in window)) return; speechSynthesis.cancel();
- const u=new SpeechSynthesisUtterance(text.replace(/[*#_`]/g,'')); u.rate=S.rate;
+// speech: never cut. New lines queue behind the current one; we track an estimated end because Android's onend can fire early.
+let speakUntil=0,_spFin=null;
+function hush(){try{speechSynthesis.cancel()}catch(_){}speakUntil=0;if(_spFin){_spFin();_spFin=null}window._speechDone=Promise.resolve()}
+function speaking(){return Date.now()<speakUntil||('speechSynthesis' in window&&(speechSynthesis.speaking||speechSynthesis.pending))}
+function speak(text,lang,o={}){
+ if(!('speechSynthesis' in window)){window._speechDone=Promise.resolve();return}
+ if(o.interrupt)hush();
+ const clean=text.replace(/[*#_`]/g,'').replace(/\+?\(?\d[\d\s().-]{5,}\d/g,m=>m.replace(/\D/g,'').length>=7?'that number':m),u=new SpeechSynthesisUtterance(clean); u.rate=S.rate;
  const vs=speechSynthesis.getVoices();
  lang=lang||ulang();let v=lang?vs.find(x=>x.lang.replace('_','-').startsWith(lang.slice(0,2))):vs.find(x=>x.name===S.voice);
  if(v){u.voice=v;u.lang=v.lang} else if(lang) u.lang=lang;
- let fin;window._speechDone=new Promise(r=>fin=r);u.onerror=()=>fin();u.onend=()=>{fin();if(wakeOn) startWake()}; pauseWake(); speechSynthesis.speak(u);
+ const est=Math.round(clean.length/(14*(+S.rate||1))*1000)+300,start=Math.max(Date.now(),speakUntil);speakUntil=start+est;
+ let fin;const ended=new Promise(r=>fin=r);_spFin=fin;u.onerror=()=>fin();u.onend=()=>fin();
+ const until=speakUntil;window._speechDone=ended.then(()=>sleep(Math.max(0,until-Date.now())));
+ window._speechDone.then(()=>{if(wakeOn&&!speaking())startWake()});
+ pauseWake(); speechSynthesis.speak(u);
 }
 function show(you,ans,lang){ if(you!=null)$('#you').textContent=you; $('#out').textContent=ans; lastAnswer=ans; window._lastLang=lang; speak(ans,lang); }
 
@@ -96,23 +105,23 @@ const b64=b=>new Promise(r=>{const f=new FileReader();f.onload=()=>r(f.result.sp
 const partsFrom=(heard,prompt)=>heard.audio?[{inline_data:{mime_type:heard.audio.mimeType,data:heard.audio.data}},{text:prompt}]:[{text:prompt+'\n\n"'+heard.text+'"'}];
 
 async function run(label,fn){ if(busy) return; busy=true; $('#ask').classList.add('rec'); pauseWake();
- try{await fn()}catch(e){status('');if(e.code!=='not-allowed')$('#out').textContent='⚠ '+e.message}finally{busy=false;$('#ask').classList.remove('rec');stopFn=null; if(wakeOn&&!speechSynthesis.speaking) startWake()} }
+ try{await fn()}catch(e){status('');if(e.code!=='not-allowed')$('#out').textContent='⚠ '+e.message}finally{busy=false;$('#ask').classList.remove('rec');stopFn=null; if(wakeOn) startWake()} }
 
 async function doAsk(pre){ await run('ask',async()=>{
- let heard; if(pre) heard={text:pre}; else {status('Listening… ask your question');speechSynthesis.cancel();heard=await listen({ms:SR?0:7000,fallback:true});}
+ let heard; if(pre) heard={text:pre}; else {status('Listening… ask your question');hush();heard=await listen({ms:SR?0:7000,fallback:true});}
  if(!heard.audio&&!heard.text){status('Didn\'t catch that.');return}
  {const bm=document.getElementById('buyMaps');if(bm)bm.remove()}
  if(heard.text&&await localCmd(heard.text)) return;
  if(heard.text)lastQ=heard.text; status('Thinking…'); const q=heard.audio?partsFrom(heard,'Answer the question asked in this audio.'):[{text:heard.text}]; const a=await gemini(q,SYS,undefined,HIST.slice(-12));
  HIST.push({role:'user',parts:[{text:heard.text||'(voice question)'}]},{role:'model',parts:[{text:a}]}); while(HIST.length>12) HIST.shift();
  status(''); show(heard.text??'(voice)',a); });}
-async function doSoft(){ await run('soft',async()=>{ status('Soft Listen: listening for 30s…'); speechSynthesis.cancel();
+async function doSoft(){ await run('soft',async()=>{ status('Soft Listen: listening for 30s…'); hush();
  const heard=await listen({ms:30000,continuous:true,fallback:true});
  if(!heard.audio&&!heard.text){status('Heard nothing.');return}
  status('Summarizing…'); const a=await gemini(partsFrom(heard,'This is ~30 seconds of overheard speech/conversation. Briefly summarize it and, if there is a question or task in it, answer it.'));
  status(''); show(heard.text??'(30s audio)',a); });}
 async function doTranslate(){ await run('tr',async()=>{ const L=$('#lang').value; localStorage.setItem('otocue_lang',L);
- status('Listening… speak now'); speechSynthesis.cancel(); const heard=await listen({ms:SR?0:8000,fallback:true});
+ status('Listening… speak now'); hush(); const heard=await listen({ms:SR?0:8000,fallback:true});
  if(!heard.audio&&!heard.text){status('Didn\'t catch that.');return}
  status('Translating…'); const a=await gemini(partsFrom(heard,`Translate the following speech into ${L}. Output only the translation.`),'You are a precise translator. Output only the translated text.');
  status(''); show(heard.text??'(voice)',a,LCODE[L]); });}
@@ -122,7 +131,7 @@ async function doPhoto(){ const f=$('#pfile').files[0]; if(!f){status('Pick or t
 function shrink(file){return new Promise((res,rej)=>{const i=new Image();i.onload=()=>{const m=1280,s=Math.min(1,m/Math.max(i.width,i.height)),c=document.createElement('canvas');c.width=i.width*s;c.height=i.height*s;c.getContext('2d').drawImage(i,0,0,c.width,c.height);URL.revokeObjectURL(i.src);res(c.toDataURL('image/jpeg',.85).split(',')[1])};i.onerror=()=>rej(new Error('Could not read image'));i.src=URL.createObjectURL(file)})}
 
 // ---- wake word
-function startWake(){ if(!wakeOn||busy||!SR||wakeRec) return; const r=new SR(); wakeRec=r; r.continuous=true; r.interimResults=true; r.lang=ulang()||navigator.language||'en-US';
+function startWake(){ if(!wakeOn||busy||!SR||wakeRec) return; if(speaking()){clearTimeout(startWake._t);startWake._t=setTimeout(startWake,Math.max(300,speakUntil-Date.now()+300));return} const r=new SR(); wakeRec=r; r.continuous=true; r.interimResults=true; r.lang=ulang()||navigator.language||'en-US';
  r.onresult=e=>{wakeFails=0;for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript.toLowerCase();
   const m=t.match(/\b(hey|hi|ok|okay)[ ,]*(cue|queue|q|kyu|cute|cu)\b(.*)/);
   if(m&&e.results[i].isFinal){pauseWake();const rest=m[3].trim();rest.split(' ').length>2?doAsk(rest):doAsk();return}}};
@@ -134,8 +143,8 @@ function pauseWake(){const r=wakeRec;wakeRec=null;if(r)try{r.abort()}catch(_){}}
 // ---- UI wiring
 let tapT=null;
 $('#ask').addEventListener('click',()=>{ if(busy){stopFn&&stopFn();return} if(tapT){clearTimeout(tapT);tapT=null;doSoft();return} tapT=setTimeout(()=>{tapT=null;doAsk()},280)});
-$('#softBtn').onclick=doSoft; $('#stopBtn').onclick=()=>{stopFn&&stopFn();speechSynthesis.cancel();status('')};
-$('#trBtn').onclick=doTranslate; $('#pgo').onclick=doPhoto; $('#replay').onclick=()=>lastAnswer&&speak(lastAnswer,window._lastLang);
+$('#softBtn').onclick=doSoft; $('#stopBtn').onclick=()=>{stopFn&&stopFn();hush();status('')};
+$('#trBtn').onclick=doTranslate; $('#pgo').onclick=doPhoto; $('#replay').onclick=()=>lastAnswer&&speak(lastAnswer,window._lastLang,{interrupt:true});
 $('#pmic').onclick=async()=>{ if(!SR){status('Type your question (voice needs SpeechRecognition).');return} try{status('Listening…');const h=await listen();$('#pq').value=h.text;status('')}catch(e){status(e.message)}};
 $('#pfile').onchange=()=>{const f=$('#pfile').files[0];if(f){$('#prev').src=URL.createObjectURL(f);$('#prev').style.display='block'}};
 $('#wake').onchange=e=>{wakeOn=e.target.checked;localStorage.setItem('otocue_wake',wakeOn?'1':'');if(!SR&&wakeOn){status('Wake word needs Chrome/Edge/Safari speech recognition.');}wakeOn?startWake():(pauseWake(),status(''));wakeUI()};
@@ -143,7 +152,7 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{document.que
 $('#lang').innerHTML=LANGS.map(l=>`<option>${l}</option>`).join(''); $('#lang').value=localStorage.getItem('otocue_lang')||'Spanish';
 function fillVoices(){const vs=speechSynthesis.getVoices();$('#voice').innerHTML='<option value="">Default</option>'+vs.map(v=>`<option value="${v.name.replace(/"/g,'&quot;')}">${v.name} (${v.lang})</option>`).join('');$('#voice').value=S.voice}
 if('speechSynthesis' in window){fillVoices();speechSynthesis.onvoiceschanged=fillVoices}
-$('#setBtn').onclick=()=>{{const ps=document.getElementById('playSrc');if(ps)ps.textContent='Last play source: '+(localStorage.getItem('otocue_playsrc')||'none yet')}$('#cfmSet').checked=confirmOn();$('#key').value=S.key;$('#model').value=S.model;$('#rate').value=S.rate;$('#voice').value=S.voice;$('#dlg').showModal()};
+$('#setBtn').onclick=()=>{fetch('./sw.js').then(r=>r.text()).then(t=>{const m=t.match(/otocue-v(\d+)/),e=document.getElementById('appVer');if(m&&e)e.textContent='OtoCue v'+m[1]}).catch(()=>{});{const ps=document.getElementById('playSrc');if(ps)ps.textContent='Last play source: '+(localStorage.getItem('otocue_playsrc')||'none yet')}$('#cfmSet').checked=confirmOn();$('#key').value=S.key;$('#model').value=S.model;$('#rate').value=S.rate;$('#voice').value=S.voice;$('#dlg').showModal()};
 $('#close').onclick=()=>$('#dlg').close();
 $('#save').onclick=()=>{localStorage.setItem('otocue_key',$('#key').value.trim());localStorage.setItem('otocue_model',$('#model').value.trim()||DEF_MODEL);localStorage.setItem('otocue_voice',$('#voice').value);localStorage.setItem('otocue_rate',$('#rate').value);localStorage.setItem('otocue_confirm',$('#cfmSet').checked?'1':'0');$('#dlg').close();status('Settings saved ✓');if(S.key)$('#out').textContent='Ready. Tap Ask.'};
 
@@ -208,7 +217,7 @@ function runMsgCommand(t){t=(t||'').trim().replace(/[.!?]+$/,'');const r=t.repla
  const isCall=/^(?:call|phone|dial|ring)\s/i.test(r)&&!/,/.test(t);D.close();return localCmd(isCall?r:'text '+r)}
 // Ask in the modal: same start path as the main Ask (listen → listenSR → recognition.start), called synchronously inside the tap
 $('#mAsk').onclick=()=>{const b=$('#mAsk');if(b.classList.contains('rec')){stopFn&&stopFn();return}
- pauseWake();try{curRec&&curRec.abort()}catch(_){}speechSynthesis.cancel();const lbl='🎙 Ask — say “text Pops I’m on my way”';b.classList.add('rec');b.textContent='🎙 Listening… speak now (tap to stop)';$('#mTo').textContent='Listening…';busy=true;
+ pauseWake();try{curRec&&curRec.abort()}catch(_){}hush();const lbl='🎙 Ask — say “text Pops I’m on my way”';b.classList.add('rec');b.textContent='🎙 Listening… speak now (tap to stop)';$('#mTo').textContent='Listening…';busy=true;
  listen({ms:SR?0:7000}).then(async h=>{busy=false;b.classList.remove('rec');b.textContent=lbl;const t=((h&&h.text)||'').trim();if(!t){$('#mTo').textContent='Didn\'t catch that. Tap Ask and try again.';return}$('#mTo').textContent='Heard: '+t;await runMsgCommand(t)})
   .catch(e=>{busy=false;b.classList.remove('rec');b.textContent=lbl;$('#mTo').textContent=e.message||'Mic error'}).finally(()=>{if(wakeOn)setTimeout(startWake,500)})};
 $('#mNum').oninput=e=>sel(e.target.value.trim()||null);
@@ -240,7 +249,7 @@ function findContact(q){q=normN(q).replace(/^(my|the|our)\s+/,'').trim();if(!q)r
  if(al&&al.tel){const hit=cs.find(c=>digits(c.tel)===digits(al.tel));return hit||al}
  const grp=NICK[key];if(!cs.length)return null;let best=null,bs=1e9;
  for(const c of cs){const n=normN(c.name);if(!n&&!c.rel)continue;const words=n.split(' '),rel=normN(c.rel||c.relationship||'');let s;
-  if(n===q||rel===q||(grp&&grp.includes(rel)))s=0;else if(grp&&words.some(w=>grp.includes(w)))s=0.5;else if(words.includes(q)||n.startsWith(q+' '))s=1;else if(grp)s=99;else s=2+Math.min(...words.map(w=>lev(w,q)),lev(n,q));
+  if(n===q||rel===q||(grp&&grp.includes(rel)))s=0;else if(grp&&words.some(w=>grp.includes(w)))s=0.5;else if(words.includes(q)||n.startsWith(q+' '))s=1;else if(grp||/\d/.test(q))s=99;else s=2+Math.min(...words.map(w=>lev(w,q)),lev(n,q));
   if(s<bs){bs=s;best=c}}
  return bs<=2+Math.max(1,Math.floor(q.length/4))?best:null}
 // split "mom running late" into contact + message: longest matching name prefix wins
@@ -255,7 +264,7 @@ async function resolveOrPick(you,who,kind,then){const p=findContact(who);if(p&&p
  try{const q=await pickFor(who);if(q){status('');return then(q)}say(you,'No contact picked.');return}catch(_){}
  say(you,`Pick ${who} once and I'll remember.`);let b=$('#tapOpen');if(!b){b=document.createElement('a');b.id='tapOpen';b.className='btn';$('#timers').before(b)}b.removeAttribute('href');b.hidden=false;b.textContent=`👤 Pick ${who} to ${kind}`;
  b.onclick=async e=>{e.preventDefault();b.remove();try{const q=await pickFor(who);if(q)then(q)}catch(err){status('Contacts: '+err.message)}}}
-function speakWait(t){show(null,t);return new Promise(r=>{let n=0;const w=setInterval(()=>{if(!('speechSynthesis' in window)||(!speechSynthesis.speaking&&n>2)||n>40){clearInterval(w);r()}n++},250)})}
+function speakWait(t){show(null,t);return afterSpeech()}
 var TLANG={spanish:['es'],portuguese:['pt'],french:['fr'],chinese:['zh-CN'],mandarin:['zh-CN'],vietnamese:['vi'],tagalog:['tl','fil-PH'],filipino:['tl','fil-PH'],korean:['ko'],arabic:['ar'],hindi:['hi']};
 function msgLang(){return localStorage.getItem('otocue_msglang')||''}
 async function translateMsg(t,lang){const L=TLANG[(lang||'').toLowerCase()];if(!L||!t)return{t,ok:true};
@@ -308,8 +317,8 @@ const STORES={amazon:['Amazon','https://www.amazon.com/s?k='],walmart:['Walmart'
 const CATS={pet:['petco','petsmart','chewy'],home:['homedepot','lowes'],electronics:['bestbuy'],pharmacy:['cvs','walgreens'],auto:['autozone']};
 function catOf(t){t=t.toLowerCase();return /\b(pet|dog|cat|puppy|kitten|parrot|bird|fish|aquarium|hamster|rabbit|reptile|litter|kibble|leash|pellets?)\b/.test(t)?'pet':/\b(drill|tools?|paint|lumber|hardware|faucet|plumbing|garden|mulch|screws?|hammer|ladder|home improvement)\b/.test(t)?'home':/\b(tv|laptop|phone|iphone|headphones?|earbuds|airpods|camera|charger|monitor|tablet|ipad|console|electronics?)\b/.test(t)?'electronics':/\b(medicine|vitamins?|tylenol|advil|ibuprofen|allergy|pharmac\w*|bandages?|cough|cold|prescription|health)\b/.test(t)?'pharmacy':/\b(car|motor oil|oil filter|brake|tires?|wiper|battery|spark plugs?|auto\w*)\b/.test(t)?'auto':''}
 // leave the app only after the spoken line has finished (no chopped voice). url may be a Promise (e.g. resolving a video id).
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-function afterSpeech(){return Promise.race([window._speechDone||Promise.resolve(),sleep(4500)])}
+function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+function afterSpeech(){return Promise.race([window._speechDone||Promise.resolve(),sleep(8000)])}
 function openNow(you,msg,url){const short=msg.length<=90;
  if(you!==null){if(short)say(you,msg);else{status('');$('#you').textContent=you;$('#out').textContent=msg;lastAnswer=msg;window._speechDone=Promise.resolve()}}
  const fb=u=>{let b=$('#tapOpen');if(!b){b=document.createElement('a');b.id='tapOpen';b.className='btn';b.target='_blank';b.rel='noopener';$('#timers').before(b)}b.href=u;b.textContent='▶ Tap to '+(/^tel:/.test(u)?'call':/^(sms|mailto):/.test(u)?'send':/Playing/.test(msg)?'play':'open');b.onclick=()=>setTimeout(()=>b.remove(),300);b.hidden=false;window.OtoCue.fallback=true};
@@ -323,7 +332,7 @@ async function confirmRun(you,msg,url){if(!confirmOn()){openNow(you,msg,url);ret
   $('#cfmYes').onclick=()=>fin(true);$('#cfmNo').onclick=()=>fin(false);
   const go=()=>{if(done)return;status('Listening for yes / no…');listen({ms:5000}).then(h=>{if(done)return;const t=(h.text||'').toLowerCase();
    if(/\b(yes|yeah|yep|sure|ok|okay|confirm|do it|go)\b/.test(t))fin(true);else if(/\b(no|nope|cancel|stop|don'?t)\b/.test(t))fin(false);else status('Tap Confirm or Cancel.')}).catch(()=>status('Tap Confirm or Cancel.'))};
-  if('speechSynthesis' in window&&SR){const w=setInterval(()=>{if(!speechSynthesis.speaking){clearInterval(w);go()}},250);setTimeout(()=>{clearInterval(w);go()},6000)}else status('Tap Confirm or Cancel.');
+  if('speechSynthesis' in window&&SR){afterSpeech().then(go)}else status('Tap Confirm or Cancel.');
  });
  status('');if(r){$('#out').textContent='✓ '+msg.replace(/\.$/,'')+'…';window.OtoCue.lastUrl=url;if(/^https?:/.test(url)){if(!window.open(url,'_blank'))location.href=url}else location.href=url}else{$('#out').textContent='Cancelled.';speak('Cancelled.')}}
 let timers=0;function startTimer(you,n,unit){const ms=n*(/^h/.test(unit)?3600e3:/^s/.test(unit)?1e3:60e3),lbl=`${n} ${n==1?unit.replace(/s$/,''):unit.replace(/s?$/,'s')}`;timers++;
@@ -430,7 +439,7 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)lock()});
 const unlock=()=>{try{ac=ac||new(window.AudioContext||window.webkitAudioContext)();ac.resume()}catch(_){}};document.addEventListener('pointerdown',unlock,{passive:true});
 function beep(){if(!ac)unlock();if(!ac)return;const t=ac.currentTime;for(let i=0;i<3;i++){const o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.value=880;g.gain.setValueAtTime(.0001,t+i*.25);g.gain.exponentialRampToValueAtTime(.6,t+i*.25+.02);g.gain.exponentialRampToValueAtTime(.0001,t+i*.25+.2);o.connect(g).connect(ac.destination);o.start(t+i*.25);o.stop(t+i*.25+.22)}}
 function stopRing(){clearInterval(beepT);beepT=null;try{navigator.vibrate&&navigator.vibrate(0)}catch(_){}const c=$('#alarmCard');if(c)c.remove();ringing=null;lock()}
-function fire(x){if(ringing)return;ringing=x;speechSynthesis&&speechSynthesis.cancel();
+function fire(x){if(ringing)return;ringing=x;speechSynthesis&&hush();
  const q=x.song?encodeURIComponent(x.song):'',yt='https://www.youtube.com/results?search_query='+q;
  const c=document.createElement('div');c.id='alarmCard';c.setAttribute('role','alertdialog');
  c.innerHTML=`<div class="wk">⏰</div><h2>${x.text?'Reminder':'Wake up'}</h2><p class="at"></p>${x.song?`<iframe id="alarmYT" allow="autoplay; encrypted-media" src="https://www.youtube-nocookie.com/embed?listType=search&list=${q}&autoplay=1&playsinline=1"></iframe><a class="btn" id="alarmPlay" href="${yt}" target="_blank" rel="noopener">▶ Play song</a>`:''}<div class="row"><button class="btn2" id="alarmSnooze">😴 Snooze 5 min</button><button class="btn" id="alarmStop">⏹ Stop</button></div>`;
@@ -486,7 +495,7 @@ const LN=['English','Spanish','French','German','Italian','Portuguese','Japanese
 const LC={English:'en-US',Spanish:'es-ES',French:'fr-FR',German:'de-DE',Italian:'it-IT',Portuguese:'pt-BR',Japanese:'ja-JP',Korean:'ko-KR','Chinese (Mandarin)':'zh-CN',Hindi:'hi-IN',Arabic:'ar-SA',Russian:'ru-RU',Vietnamese:'vi-VN',Tagalog:'fil-PH'};
 $('#convA').innerHTML=$('#convB').innerHTML=LN.map(l=>`<option>${l}</option>`).join('');$('#convA').value=localStorage.getItem('otocue_convA')||'English';$('#convB').value=localStorage.getItem('otocue_convB')||'Spanish';
 let conv=false;const log=t=>{const d=document.createElement('div');d.textContent=t;$('#convLog').prepend(d)};
-const waitSpeak=()=>new Promise(r=>{const s=Date.now();const iv=setInterval(()=>{if(!('speechSynthesis' in window)||(!speechSynthesis.speaking&&Date.now()-s>300)||Date.now()-s>30000){clearInterval(iv);r()}},200)});
+const waitSpeak=()=>new Promise(r=>{const s=Date.now();const iv=setInterval(()=>{if(!('speechSynthesis' in window)||(!speaking()&&Date.now()-s>300)||Date.now()-s>30000){clearInterval(iv);r()}},200)});
 async function convTurn(A,B,turn){const lang=turn%2?B:A;status(`🔁 Listening (${A} or ${B})…`);const h=await listen({ms:SR?0:8000,lang:LC[lang],fallback:true});if(!conv)return;
  if(!h.text&&!h.audio)return;status('Translating…');
  const a=await gemini(h.audio?[{inline_data:{mime_type:h.audio.mimeType,data:h.audio.data}},{text:'Interpret this speech.'}]:[{text:h.text}],`You are a live interpreter between ${A} and ${B}. Detect which of the two languages the input is in and translate it into the other one. Reply exactly as: <target language name>|<translation>. No other text.`);
@@ -543,7 +552,7 @@ function parseSocial(raw){const t=raw.trim().replace(/[.!]+$/,''),l=t.toLowerCas
 const NAME={instagram:'Instagram',facebook:'Facebook',x:'X',tiktok:'TikTok',whatsapp:'WhatsApp',snapchat:'Snapchat',linkedin:'LinkedIn'};
 const APP={instagram:'https://www.instagram.com/',tiktok:'https://www.tiktok.com/upload',snapchat:'https://www.snapchat.com/'};
 function intent(net,t){const e=encodeURIComponent(t);return{x:'https://x.com/intent/post?text='+e,facebook:'https://www.facebook.com/sharer/sharer.php?u='+encodeURIComponent('https://joeandai9511-art.github.io/otocue/')+'&quote='+e,whatsapp:'https://wa.me/?text='+e,linkedin:'https://www.linkedin.com/feed/?shareActive=true&text='+e}[net]}
-const go=u=>{O.lastUrl=u;if(!window.open(u,'_blank'))location.href=u};
+const go=u=>{O.lastUrl=u;if(!speaking()){if(!window.open(u,'_blank'))location.href=u;return}afterSpeech().then(()=>{location.href=u})};
 async function shareNow(net,text){
  if(APP[net]){try{await navigator.clipboard.writeText(text)}catch(_){}toast('Caption copied — paste it in '+NAME[net]);go(APP[net]);return 'copied'}
  if(navigator.share&&(!net||net==='whatsapp'||!intent(net,text))){try{await navigator.share({text});return 'shared'}catch(e){if(e.name==='AbortError')return 'cancelled'}}
