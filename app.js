@@ -349,9 +349,10 @@ function phonePlan(kind,o){const title=kind==='timer'?`⏱ ${o.label} timer`:kin
  const g=gcalUrl(title,start,mins,o.rule,'Reminder from OtoCue'),ics=icsUrl(title,start,mins,o.rule);let auto;
  if(kind==='reminder')auto=g;else if(isAndroid())auto=kind==='timer'?timerIntent(o.sec,title,g):alarmIntent(start,title,g);else auto=g;
  return{auto,g,ics,title,clock:kind==='timer'?timerIntent(o.sec,title,g):alarmIntent(start,title,g)}}
+// one tap-only button: .ics (text/calendar) download, which Android hands to the default calendar app (e.g. Samsung Calendar). Never auto-opens.
 function phoneCard(p){let c=document.getElementById('phoneCard');if(!c){c=document.createElement('div');c.id='phoneCard';c.className='savemini';$('#out').after(c)}
- c.innerHTML='<span></span>'+(isAndroid()?'<a id="pcClock">⏰ Clock</a>':'')+'<a id="pcG" target="_blank" rel="noopener">📅 Calendar</a><a id="pcIcs">⬇ .ics</a><button id="pcX" aria-label="Close">✕</button>';
- c.querySelector('span').textContent='Optional, save to phone:';if(isAndroid())c.querySelector('#pcClock').href=p.clock;c.querySelector('#pcG').href=p.g;const a=c.querySelector('#pcIcs');a.href=p.ics;a.download='otocue-reminder.ics';c.querySelector('#pcX').onclick=()=>c.remove()}
+ c.innerHTML='<a id="pcIcs">📅 Add to my calendar</a><button id="pcX" aria-label="Close">✕</button>';const a=c.querySelector('#pcIcs');a.href=p.ics;a.type='text/calendar';a.download=(p.title.replace(/[^\w ]+/g,'').trim().slice(0,40)||'otocue-reminder').replace(/\s+/g,'-')+'.ics';
+ a.onclick=()=>setTimeout(()=>{a.textContent='✓ Open the download to add it';},300);c.querySelector('#pcX').onclick=()=>c.remove()}
 function savePhone(kind,o){const p=phonePlan(kind,o);phoneCard(p);window.OtoCue.lastPhone=p;return p} // never navigates: save buttons are tap-only
 function openNow(you,msg,url){const short=msg.length<=170;
  if(you!==null){if(short)say(you,msg);else{status('');$('#you').textContent=you;$('#out').textContent=msg;lastAnswer=msg;window._speechDone=Promise.resolve()}}
