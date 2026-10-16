@@ -49,11 +49,17 @@ async function geminiRaw(parts,system=SYS,model,hist){
 }
 const ACACHE=new Map();function ctxHist(h,parts){h=h||[];const q=JSON.stringify(parts);let i=h.length;while(i>=2&&JSON.stringify(h[i-2].parts)===q)i-=2;return h.slice(Math.max(0,i-2),i)}
 let qT=null;
+const LITE_MODEL='gemini-3.5-flash-lite';
+function pickModel(parts,hist){const t=(parts||[]).map(p=>p.text||'').join(' ');const media=(parts||[]).some(p=>p.inline_data);
+ if(media||needsSearch(parts)||t.length>90||t.split(/\s+/).length>16||/\b(explain|compare|why|plan|write|essay|code|detailed|step by step|analy[sz]e|summari[sz]e|recipe|itinerary|pros and cons)\b/i.test(t))return S.model;return LITE_MODEL}
+async function geminiTiered(parts,system,hist){const first=pickModel(parts,hist),other=first===LITE_MODEL?S.model:LITE_MODEL;
+ try{const a=await geminiRaw(parts,system,first,hist);window.OtoCue&&(window.OtoCue.lastModel=first);return a}
+ catch(e){if(e instanceof TypeError)throw e;const a=await geminiRaw(parts,system,other,hist);window.OtoCue&&(window.OtoCue.lastModel=other);return a}}
 async function gemini(parts,system=SYS,model,hist){
  if(navigator.onLine===false) throw new Error("You're offline. Timers, alarms, reminders and the time still work offline.");
  const k=parts.every(p=>p.text!=null)&&!needsSearch(parts)?JSON.stringify([system,parts,ctxHist(hist,parts)]):null;
  if(k){const c=ACACHE.get(k);if(c&&Date.now()-c.t<600e3)return c.a}
- try{const a=await geminiRaw(parts,system,model,hist);if(k){ACACHE.set(k,{a,t:Date.now()});if(ACACHE.size>30)ACACHE.delete(ACACHE.keys().next().value)}return a}
+ try{const a=model?await geminiRaw(parts,system,model,hist):await geminiTiered(parts,system,hist);if(k){ACACHE.set(k,{a,t:Date.now()});if(ACACHE.size>30)ACACHE.delete(ACACHE.keys().next().value)}return a}
  catch(e){if(e instanceof TypeError)throw new Error("You're offline or the network failed. Try again.");
   if(e.quota&&e.retry){clearInterval(qT);let n=e.retry;qT=setInterval(()=>{n--;if(n<=0){clearInterval(qT);status('Quota should be back — try again.')}else if(!busy)status(`Gemini quota: try again in ${n}s`)},1000)}throw e}}
 const SYS='You are OtoCue, a concise AI assistant heard through an earpiece. Answer in 1-4 short spoken sentences, plain text, no markdown or lists. You cannot set alarms, timers, reminders, make calls, send texts or emails, or take any action on the device yourself; the app handles those only when the user uses command phrasing. Never claim you have done or set anything. If asked, say to use a command like "wake me up at 7 AM to <song>", "set an alarm for 6:30", "timer 5 minutes", "call Mom", "text Mom that I am on my way", "email Mom subject Dinner I will be late", "post to X <text>" or "share this".';
@@ -286,10 +292,12 @@ function trCmd(t){const l=normCmd(t);if(!l)return null;
  return null}
 function msgLang(){return localStorage.getItem('otocue_msglang')||''}
 async function translateMsg(t,lang){const L=TLANG[(lang||'').toLowerCase()];if(!L||!t)return{t,ok:true};
- try{const r=(await geminiRaw([{text:t}],`Translate the user's text message into ${lang}. Keep the tone casual. Output only the translation.`,undefined,[],false)).trim();if(r)return{t:r,ok:true,via:'gemini'}}catch(_){}
+ {const GT={spanish:'es',portuguese:'pt',french:'fr',chinese:'zh-CN',vietnamese:'vi',tagalog:'tl',korean:'ko',arabic:'ar',hindi:'hi',japanese:'ja',german:'de',italian:'it',russian:'ru'}[(lang||'').toLowerCase()]||L[0];
+  try{const c=new AbortController(),tm=setTimeout(()=>c.abort(),5000);const j=await(await fetch('https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl='+encodeURIComponent(GT)+'&dt=t&q='+encodeURIComponent(t),{signal:c.signal})).json();clearTimeout(tm);const r=(j&&j[0]||[]).map(x=>x[0]).join('').trim();if(r&&r.toLowerCase()!==t.toLowerCase())return{t:r,ok:true,via:'google'}}catch(_){}}
  for(const code of L){try{const j=await (await fetch('https://api.mymemory.translated.net/get?q='+encodeURIComponent(t)+'&langpair=en|'+code)).json();if(!j||j.responseStatus!=200)continue;const src=new Set(t.toLowerCase().match(/[a-z']+/g)||[]),eng=r=>{const w=r.toLowerCase().match(/[a-z']+/g)||[];return w.length&&w.filter(x=>src.has(x)).length/w.length>=.5};
   const ms=j.matches||[],cands=[...ms.filter(m=>m['created-by']==='MT!').map(m=>m.translation),(j.responseData||{}).translatedText];
   for(let r of cands){r=(r||'').trim();if(r&&!/MYMEMORY WARNING|INVALID/i.test(r)&&!eng(r)){const x=document.createElement('textarea');x.innerHTML=r;return{t:x.value,ok:true,via:'mymemory'}}}}catch(_){}}
+ try{const r=(await geminiRaw([{text:t}],`Translate the user's text message into ${lang}. Keep the tone casual. Output only the translation.`,LITE_MODEL,[],false)).trim();if(r)return{t:r,ok:true,via:'gemini'}}catch(_){}
  return{t,ok:false}}
 async function textTo(you,p,msg,lang){if(!msg){await speakWait('What should I say?');try{status('Listening… say your message');msg=((await listen({ms:SR?0:7000})).text||'').trim()}catch(_){}status('');
   if(!msg){const t=prompt(`What should I text ${p.name}?`);msg=(t||'').trim()}if(!msg){say(you,'No message, so I didn\'t text.');return}}
@@ -800,6 +808,57 @@ const prev=localCmd;localCmd=async t=>manage(t)||prev(t);O.manage=manage;
   if(tc.on&&!tc.lang){say(t,`Translate is ${msgLang()?'on, '+msgLang():'off'}. Say “translate to Spanish” to pick a language.`);return true}
   if(TLANG[tc.lang]){const L=tc.lang[0].toUpperCase()+tc.lang.slice(1);localStorage.setItem('otocue_msglang',L);if(ml)ml.value=L;say(t,`Messages will be translated to ${L}.`);return true}}
  return pv(t)}}
+// ---- local quick answers: date/day, countdowns, math/percent/tip, unit conversions, translate phrase (never Gemini)
+{const MON=['january','february','march','april','may','june','july','august','september','october','november','december'];
+ const fmtD=d=>d.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
+ const HOL=y=>{const nth=(m,wd,n)=>{const d=new Date(y,m,1);d.setDate(1+((wd-d.getDay()+7)%7)+7*(n-1));return d},last=(m,wd)=>{const d=new Date(y,m+1,0);d.setDate(d.getDate()-((d.getDay()-wd+7)%7));return d};
+  return{christmas:new Date(y,11,25),'christmas eve':new Date(y,11,24),'new year':new Date(y+1,0,1),'new years':new Date(y+1,0,1),"new year's":new Date(y+1,0,1),'new years eve':new Date(y,11,31),halloween:new Date(y,9,31),'valentines day':new Date(y,1,14),valentines:new Date(y,1,14),'fourth of july':new Date(y,6,4),'july 4th':new Date(y,6,4),'independence day':new Date(y,6,4),thanksgiving:nth(10,4,4),'mothers day':nth(4,0,2),'fathers day':nth(5,0,3),'memorial day':last(4,1),'labor day':nth(8,1,1),'st patricks day':new Date(y,2,17),'cinco de mayo':new Date(y,4,5)}};
+ const NUMW={zero:0,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,eleven:11,twelve:12,fifteen:15,twenty:20,thirty:30,fifty:50,hundred:100};
+ function pDate(x){x=x.replace(/\b(the|on)\b/g,'').replace(/(\d+)(st|nd|rd|th)\b/g,'$1').replace(/\s+/g,' ').trim();const now=new Date(),y=now.getFullYear(),t0=new Date(y,now.getMonth(),now.getDate());
+  for(const yy of[y,y+1]){const h=HOL(yy)[x.replace(/'/g,'')];if(h&&(h>=t0||yy>y))return h}
+  if(x==='tomorrow')return new Date(y,now.getMonth(),now.getDate()+1);if(x==='today')return t0;
+  let m=x.match(/^([a-z]+) (\d{1,2})(?:,? (\d{4}))?$/)||x.match(/^(\d{1,2}) (?:of )?([a-z]+)(?:,? (\d{4}))?$/);
+  if(m){let mo,d;if(/^\d/.test(m[1])){d=+m[1];mo=MON.findIndex(n=>n.startsWith(m[2].slice(0,3)))}else{mo=MON.findIndex(n=>n.startsWith(m[1].slice(0,3)));d=+m[2]}if(mo<0)return null;let dt=new Date(m[3]?+m[3]:y,mo,d);if(!m[3]&&dt<t0)dt=new Date(y+1,mo,d);return dt}
+  m=x.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/);if(m){let yy=m[3]?(+m[3]<100?2000+ +m[3]:+m[3]):y;let dt=new Date(yy,+m[1]-1,+m[2]);if(!m[3]&&dt<t0)dt=new Date(y+1,+m[1]-1,+m[2]);return dt}
+  return null}
+ const fmtN=n=>{const r=Math.abs(n)>=100?Math.round(n*10)/10:Math.round(n*100)/100;return r.toLocaleString('en-US')};
+ const U={f:'fahrenheit',c:'celsius',mi:'mile',km:'kilometer',lb:'pound',kg:'kilogram',oz:'ounce',cup:'cup',in:'inch',cm:'centimeter',ft:'foot',m:'meter',g:'gram',gal:'gallon',l:'liter',ml:'milliliter',tbsp:'tablespoon',tsp:'teaspoon'};
+ const UA={fahrenheit:'f',f:'f',degrees:'f',celsius:'c',centigrade:'c',c:'c',miles:'mi',mile:'mi',mi:'mi',kilometers:'km',kilometer:'km',km:'km',kilometres:'km',pounds:'lb',pound:'lb',lbs:'lb',lb:'lb',kilograms:'kg',kilogram:'kg',kilos:'kg',kilo:'kg',kg:'kg',ounces:'oz',ounce:'oz',oz:'oz','fluid ounces':'oz',cups:'cup',cup:'cup',inches:'in',inch:'in',centimeters:'cm',centimeter:'cm',cm:'cm',feet:'ft',foot:'ft',ft:'ft',meters:'m',meter:'m',m:'m',grams:'g',gram:'g',g:'g',gallons:'gal',gallon:'gal',liters:'l',liter:'l',litres:'l',l:'l',milliliters:'ml',ml:'ml',tablespoons:'tbsp',tablespoon:'tbsp',tbsp:'tbsp',teaspoons:'tsp',teaspoon:'tsp',tsp:'tsp'};
+ const TO={mi:['km',1.609344],km:['mi',1/1.609344],lb:['kg',0.45359237],kg:['lb',1/0.45359237],in:['cm',2.54],cm:['in',1/2.54],ft:['m',0.3048],m:['ft',1/0.3048],gal:['l',3.785411784],l:['gal',1/3.785411784],g:['oz',1/28.349523125]};
+ const VOL={cup:236.5882365,oz:29.5735295625,ml:1,l:1000,gal:3785.411784,tbsp:14.78676478125,tsp:4.92892159375};const LEN={mi:1609.344,km:1000,m:1,ft:0.3048,in:0.0254,cm:0.01};const MASS={lb:453.59237,kg:1000,g:1,oz:28.349523125};
+ function conv(v,a,b){if(a==='f'&&(!b||b==='c'))return[(v-32)*5/9,'c'];if(a==='c'&&(!b||b==='f'))return[v*9/5+32,'f'];
+  for(const T of[VOL,LEN,MASS])if(T[a]){if(b&&T[b])return[v*T[a]/T[b],b];if(!b&&TO[a])return[v*TO[a][1],TO[a][0]];if(!b&&a==='cup')return[v*8,'oz'];if(!b&&a==='oz'&&T===VOL)return[v/8,'cup']}
+  if(!b&&TO[a])return[v*TO[a][1],TO[a][0]];return null}
+ const uname_=(u,n)=>{let w=U[u];if(u==='f'||u==='c')return(n===1?'degree ':'degrees ')+w[0].toUpperCase()+w.slice(1);if(n!==1)w=w==='foot'?'feet':w==='inch'?'inches':w+'s';return w};
+ function quick(t){let l=(t||'').toLowerCase().replace(/[“”"?!']/g,'').replace(/[.,]+\s*$/,'').replace(/,(?!\d{3})/g,'').replace(/^(?:hey cue |ok |okay |please )+/,'').replace(/\s+/g,' ').trim();let m;const nn=x=>{x=x.replace(/,/g,'');return NUMW[x]!=null?NUMW[x]:parseFloat(x)};
+  // date / day
+  if(/^(?:what(?:s| is)? (?:the |todays )?date(?: today)?|whats today|what is today|todays date|what day is (?:it|today)|what day of the week is it|what is the day today)$/.test(l)){const d=new Date();return`Today is ${fmtD(d)}.`}
+  if(m=l.match(/^what (?:day|day of the week) (?:is|was|will be|does) (.+?)(?: fall on| land on| on)?$/)){const d=pDate(m[1]);if(d)return`${m[1].replace(/\b\w/g,c=>c.toUpperCase())} is ${d.toLocaleDateString('en-US',{weekday:'long'})}, ${d.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}.`}
+  if(m=l.match(/^(?:how many (?:more )?(days|weeks|sleeps) (?:until|till|til|to|before)|how long (?:until|till|til|before)|days (?:until|till|til|to)|countdown to) (.+?)$/)){const x=m[2]||m[1];const d=pDate(x.replace(/^(?:days|weeks|sleeps) /,''));if(d){const now=new Date(),t0=new Date(now.getFullYear(),now.getMonth(),now.getDate()),n=Math.round((d-t0)/864e5);const nm=x.replace(/\b\w/g,c=>c.toUpperCase());if(n===0)return`${nm} is today!`;if(m[1]==='weeks')return`${fmtN(n/7)} weeks until ${nm} (${n} days).`;return`${n} ${n===1?'day':'days'} until ${nm}, on ${d.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}.`}}
+  // tip
+  if(m=l.match(/^(?:whats |what is |calculate |figure out )?(?:an? |the )?(\d+(?:\.\d+)?)\s*(?:percent|%) tip (?:on|for) (?:a |an )?\$?([\d,]+(?:\.\d+)?)(?: dollars?)?(?: bill| check)?(?: split (\d+|two|three|four|five|six) ways)?$/)||l.match(/^(?:how much (?:should i |do i )?tip|tip) (?:on|for) (?:a |an )?\$?([\d,]+(?:\.\d+)?)(?: dollars?)?(?: bill| check)?()()$/)){
+   let pct,amt,split;if(m[3]!==undefined&&/percent|%/.test(l)){pct=+m[1];amt=nn(m[2]);split=m[3]?nn(m[3]):0}else if(/percent|%/.test(l)){pct=+m[1];amt=nn(m[2])}else{amt=nn(m[1]);pct=0}
+   const money=x=>'$'+x.toFixed(2);if(!pct){return`On ${money(amt)}: 15% is ${money(amt*.15)}, 18% is ${money(amt*.18)}, 20% is ${money(amt*.2)}.`}
+   const tip=amt*pct/100;let r=`A ${pct}% tip on ${money(amt)} is ${money(tip)}, total ${money(amt+tip)}.`;if(split>1)r+=` Split ${split} ways, that's ${money((amt+tip)/split)} each.`;return r}
+  // percent
+  if(m=l.match(/^(?:whats |what is |calculate )?([\d,.]+)\s*(?:percent|%) of \$?([\d,.]+)$/)){const r=nn(m[1])*nn(m[2])/100;return`${m[1]}% of ${m[2]} is ${fmtN(r)}.`}
+  if(m=l.match(/^(?:whats |what is )?([\d,.]+) (?:is )?what percent(?:age)? of ([\d,.]+)$/)){return`${m[1]} is ${fmtN(nn(m[1])/nn(m[2])*100)}% of ${m[2]}.`}
+  // conversions
+  if(m=l.match(/^(?:(?:convert|whats|what is|how many|how much is)\s+)?(-?[\d.,]+|a|an|one|two|three|four|five|ten)\s+(?:degrees? )?([a-z ]+?)\s+(?:to|in|into|is how many|equals how many)\s+(?:degrees? )?([a-z ]+?)$/)||l.match(/^how many ([a-z ]+?) (?:are )?in (?:a |an |one )?(-?[\d.,]*)\s*([a-z ]+?)$/)){
+   let v,a,b;if(/^how many/.test(l)&&!/^how many\s+[\d]/.test(l)&&m.length===4&&l.match(/^how many ([a-z ]+?) (?:are )?in/)){b=UA[m[1]];v=m[2]?nn(m[2]):1;a=UA[m[3]]}else{v=/^(a|an)$/.test(m[1])?1:nn(m[1]);a=UA[m[2]];b=UA[m[3]]}
+   if(a&&b&&!isNaN(v)){const r=conv(v,a,b);if(r)return`${fmtN(v)} ${uname_(a,v)} is ${fmtN(r[0])} ${uname_(r[1],r[0])}.`}}
+  if(m=l.match(/^(?:whats |what is |convert )?(-?[\d.]+)\s*(?:degrees? )?(f|c|fahrenheit|celsius)(?: in| to)?(?: celsius| fahrenheit| c| f)?$/)){const a=UA[m[2]],r=conv(+m[1],a);if(r)return`${fmtN(+m[1])} ${uname_(a,+m[1])} is ${fmtN(r[0])} ${uname_(r[1],r[0])}.`}
+  // basic math
+  {let e=l.replace(/^(?:whats|what is|calculate|compute|how much is|solve)\s+/,'').replace(/\?$/,'').replace(/\bplus\b/g,'+').replace(/\b(?:minus|less)\b/g,'-').replace(/\b(?:times|multiplied by|x)\b/g,'*').replace(/\b(?:divided by|over)\b/g,'/').replace(/\bsquared\b/g,'^2').replace(/\bcubed\b/g,'^3').replace(/\bto the power of\b/g,'^').replace(/\bsquare root of\s*([\d.]+)/g,'sqrt($1)').replace(/(\d),(\d{3})/g,'$1$2').replace(/\s+/g,'');
+   if(/\d/.test(e)&&/[-+*/^]|sqrt/.test(e)&&/^[\d.+\-*/^()sqrt]+$/.test(e)){try{const js=e.replace(/sqrt/g,'Math.sqrt').replace(/\^/g,'**');const r=Function('"use strict";return('+js+')')();if(isFinite(r))return`That's ${fmtN(r)}.`}catch(_){}}}
+  return null}
+ window.OtoCue.quick=quick;
+ const pv=localCmd;localCmd=async t=>{
+  const tr=normCmd(t).match(/^(?:how do (?:you|i) say |translate |say )(.+?) (?:in|to|into) ([a-z]+)$/);
+  if(tr&&TLANG[tr[2]]){const lang=tr[2][0].toUpperCase()+tr[2].slice(1),src=t.replace(/^\s*(?:how do (?:you|i) say|translate|say)\s+/i,'').replace(new RegExp('\\s+(?:in|to|into)\\s+'+tr[2]+'\\W*$','i'),'').replace(/^["“]|["”]$/g,'');status(`Translating to ${lang}…`);const r=await translateMsg(src,lang);status('');
+   if(r.ok){window.OtoCue.lastTr=r;say(t,`In ${lang}: ${r.t}`);return true}say(t,`I couldn't translate that right now.`);return true}
+  const a=quick(t);if(a){say(t,a);return true}return pv(t)}}
+
 // ---- local weather (Open-Meteo, no key, never Gemini)
 {const WMO={0:'clear',1:'mostly clear',2:'partly cloudy',3:'cloudy',45:'foggy',48:'foggy',51:'light drizzle',53:'drizzle',55:'heavy drizzle',56:'freezing drizzle',57:'freezing drizzle',61:'light rain',63:'rainy',65:'heavy rain',66:'freezing rain',67:'freezing rain',71:'light snow',73:'snowy',75:'heavy snow',77:'snow grains',80:'light showers',81:'showers',82:'heavy showers',85:'snow showers',86:'heavy snow showers',95:'thunderstorms',96:'thunderstorms with hail',99:'thunderstorms with hail'};
  const wd=(c,day)=>{const w=WMO[c]||'mixed';return c<=1&&day?(c?'mostly sunny':'sunny'):w};
