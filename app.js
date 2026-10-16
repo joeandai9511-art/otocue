@@ -10,6 +10,7 @@ let wakeFails=0,lastAnswer='',busy=false,curRec=null,wakeRec=null,wakeOn=false,s
 const status=t=>$('#status').textContent=t||'';
 
 const FALLBACKS=['gemini-flash-latest','gemini-3.6-flash','gemini-2.5-flash'];
+try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(_){}
 let noSearch=sessionStorage.getItem('otocue_nosearch')==='1';const HIST=[];
 function contactsCtx(){try{const c=JSON.parse(localStorage.getItem('otocue_contacts')||'[]');if(!c.length)return '';return ' The user shared these contacts: '+c.map(x=>`${x.name}: ${x.tel||''} ${x.email||''}`).join('; ')+'. If the user asks to call or text one of them, include exactly [CALL:number] or [TEXT:number] in your reply.'}catch(_){return ''}}
 function timeCtx(s){const d=new Date(),tz=Intl.DateTimeFormat().resolvedOptions().timeZone;return ` The current date and time for the user is ${d.toLocaleString('en-US',{timeZone:tz,dateStyle:'full',timeStyle:'long'})} (time zone ${tz}); exact UTC time ${d.toISOString()}. Use this for any question about the current time or date anywhere, converting time zones yourself.`+(s?' Use Google Search for anything current (weather, news, scores, prices, hours).':'')}
@@ -149,7 +150,7 @@ $('#contactsBtn').onclick=async()=>{
  if(!('contacts' in navigator&&'select' in navigator.contacts)){status('Contacts sharing works in Chrome on Android. iPhone web apps can\'t access contacts.');return}
  try{const r=await navigator.contacts.select(['name','tel','email'],{multiple:true});
   const c=r.map(x=>({name:(x.name||[])[0]||'',tel:(x.tel||[])[0]||'',email:(x.email||[])[0]||''}));
-  localStorage.setItem('otocue_contacts',JSON.stringify(c));status(`Shared ${c.length} contact(s) with OtoCue.`)}catch(e){status('Contacts: '+e.message)}};
+  const n=mergeContacts(c);status(`Shared ${c.length} contact(s) with OtoCue (${n} saved).`)}catch(e){status('Contacts: '+e.message)}};
 (function(){const o=$('#out');if(!o)return;new MutationObserver(()=>{const t=o.textContent,m=t.match(/\[(CALL|TEXT):([^\]]+)\]/);if(m){o.textContent=t.replace(m[0],'');location.href=(m[1]==='CALL'?'tel:':'sms:')+m[2].replace(/[^+\d]/g,'')}}).observe(o,{childList:true,characterData:true,subtree:true})})();
 
 // ---- v2 UI layer (visuals, chat, haptics, message)
@@ -201,24 +202,48 @@ $('#mMic').onclick=async()=>{if(busy)return;const b=$('#mMic');b.textContent='�
  try{const h=await listen({ms:SR?0:8000});if(h.text)$('#mText').value=(($('#mText').value+' ')+h.text).trim();else if(h.audio)$('#mTo').textContent='Voice typing needs speech recognition — please type the message.'}catch(e){$('#mTo').textContent=e.message}finally{b.textContent='🎙 Speak'}};
 $('#mSend').onclick=()=>{const n=(to||'').replace(/[^+\d]/g,''),t=$('#mText').value.trim();
  if(!n){$('#mTo').textContent='Choose a contact or enter a number.';return}if(!t){$('#mTo').textContent='Say or type a message.';return}
- buzz([10,30,10]);D.close();location.href='sms:'+n+'?&body='+encodeURIComponent(t)};
+ buzz([10,30,10]);D.close();location.href=smsUrl(n,t)};
 })();
 
 // ---- local voice commands (no Gemini)
 const CITY={'new york':'America/New_York','nyc':'America/New_York','los angeles':'America/Los_Angeles','la':'America/Los_Angeles','san francisco':'America/Los_Angeles','seattle':'America/Los_Angeles','las vegas':'America/Los_Angeles','chicago':'America/Chicago','houston':'America/Chicago','dallas':'America/Chicago','denver':'America/Denver','phoenix':'America/Phoenix','miami':'America/New_York','boston':'America/New_York','atlanta':'America/New_York','washington':'America/New_York','toronto':'America/Toronto','vancouver':'America/Vancouver','mexico city':'America/Mexico_City','honolulu':'Pacific/Honolulu','hawaii':'Pacific/Honolulu','anchorage':'America/Anchorage','sao paulo':'America/Sao_Paulo','rio':'America/Sao_Paulo','buenos aires':'America/Argentina/Buenos_Aires','bogota':'America/Bogota','lima':'America/Lima','santiago':'America/Santiago','london':'Europe/London','dublin':'Europe/Dublin','lisbon':'Europe/Lisbon','paris':'Europe/Paris','berlin':'Europe/Berlin','madrid':'Europe/Madrid','barcelona':'Europe/Madrid','rome':'Europe/Rome','milan':'Europe/Rome','amsterdam':'Europe/Amsterdam','brussels':'Europe/Brussels','zurich':'Europe/Zurich','vienna':'Europe/Vienna','stockholm':'Europe/Stockholm','oslo':'Europe/Oslo','copenhagen':'Europe/Copenhagen','helsinki':'Europe/Helsinki','warsaw':'Europe/Warsaw','prague':'Europe/Prague','athens':'Europe/Athens','istanbul':'Europe/Istanbul','moscow':'Europe/Moscow','kyiv':'Europe/Kyiv','cairo':'Africa/Cairo','lagos':'Africa/Lagos','nairobi':'Africa/Nairobi','johannesburg':'Africa/Johannesburg','dubai':'Asia/Dubai','tel aviv':'Asia/Jerusalem','jerusalem':'Asia/Jerusalem','riyadh':'Asia/Riyadh','tehran':'Asia/Tehran','karachi':'Asia/Karachi','mumbai':'Asia/Kolkata','delhi':'Asia/Kolkata','new delhi':'Asia/Kolkata','bangalore':'Asia/Kolkata','dhaka':'Asia/Dhaka','bangkok':'Asia/Bangkok','hanoi':'Asia/Ho_Chi_Minh','ho chi minh city':'Asia/Ho_Chi_Minh','jakarta':'Asia/Jakarta','singapore':'Asia/Singapore','kuala lumpur':'Asia/Kuala_Lumpur','manila':'Asia/Manila','hong kong':'Asia/Hong_Kong','beijing':'Asia/Shanghai','shanghai':'Asia/Shanghai','taipei':'Asia/Taipei','seoul':'Asia/Seoul','tokyo':'Asia/Tokyo','osaka':'Asia/Tokyo','sydney':'Australia/Sydney','melbourne':'Australia/Melbourne','brisbane':'Australia/Brisbane','perth':'Australia/Perth','auckland':'Pacific/Auckland'};
-const NICK={mom:['mom','mommy','mama','mum','mother','ma'],dad:['dad','daddy','papa','father','pa','pop'],grandma:['grandma','granny','nana','grandmother'],grandpa:['grandpa','grandfather','gramps'],wife:['wife','honey','babe'],husband:['husband','hubby']};
+const NICK={mom:['mom','mommy','mama','mum','mother','ma','madre','mami','momma','mommie','mamma'],dad:['dad','daddy','papa','father','pa','pop','pops','padre','papi','dada'],grandma:['grandma','granny','nana','grandmother'],grandpa:['grandpa','grandfather','gramps'],wife:['wife','honey','babe'],husband:['husband','hubby']};
 const APPS={youtube:['https://www.youtube.com','vnd.youtube://'],maps:['https://www.google.com/maps','geo:0,0'],'google maps':['https://www.google.com/maps'],spotify:['https://open.spotify.com','spotify:'],instagram:['https://www.instagram.com','instagram://app'],whatsapp:['https://web.whatsapp.com','whatsapp://'],gmail:['https://mail.google.com'],netflix:['https://www.netflix.com'],tiktok:['https://www.tiktok.com']};
-function contacts(){try{return JSON.parse(localStorage.getItem('otocue_contacts')||'[]')}catch(_){return[]}}
+function contacts(){let c=[];try{c=JSON.parse(localStorage.getItem('otocue_contacts')||'[]')}catch(_){}if(!c.length){try{c=JSON.parse(localStorage.getItem('otocue_contacts_bak')||'[]');if(c.length)localStorage.setItem('otocue_contacts',JSON.stringify(c))}catch(_){}}return c}
+function saveContacts(c){const j=JSON.stringify(c);localStorage.setItem('otocue_contacts',j);localStorage.setItem('otocue_contacts_bak',j);window.OtoCue&&window.OtoCue.cl&&window.OtoCue.cl()}
+const digits=t=>(t||'').replace(/[^+\d]/g,'');
+function mergeContacts(add){const c=contacts();for(const x of add){if(!x.name&&!x.tel)continue;const i=c.findIndex(y=>(x.tel&&digits(y.tel)===digits(x.tel))||(y.name&&y.name===x.name));if(i>=0)c[i]={...c[i],...Object.fromEntries(Object.entries(x).filter(([,v])=>v))};else c.push(x)}saveContacts(c);return c.length}
+function aliases(){try{return JSON.parse(localStorage.getItem('otocue_alias')||'{}')}catch(_){return{}}}
+const normN=t=>(t||'').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/['’`]/g,'').replace(/[^\p{L}\p{N}\s]/gu,' ').replace(/\s+/g,' ').trim();
+const nickKey=q=>Object.keys(NICK).find(k=>NICK[k].includes(q))||'';
+function smsUrl(n,t){return 'sms:'+digits(n)+(t?(/iPhone|iPad|iPod/.test(navigator.userAgent)?'&':'?')+'body='+encodeURIComponent(t):'')}
 function lev(a,b){const d=[...Array(b.length+1).keys()];for(let i=1;i<=a.length;i++){let p=d[0];d[0]=i;for(let j=1;j<=b.length;j++){const t=d[j];d[j]=Math.min(d[j]+1,d[j-1]+1,p+(a[i-1]===b[j-1]?0:1));p=t}}return d[b.length]}
-function findContact(q){q=q.toLowerCase().replace(/^(my|the)\s+/,'').trim();const cs=contacts();if(!q||!cs.length)return null;
- const grp=Object.values(NICK).find(g=>g.includes(q));let best=null,bs=1e9;
- for(const c of cs){const n=(c.name||'').toLowerCase();if(!n)continue;const words=n.split(/\s+/);let s;
-  if(n===q)s=0;else if(grp&&words.some(w=>grp.includes(w)))s=0.5;else if(words.includes(q)||n.startsWith(q))s=1;else s=2+Math.min(...words.map(w=>lev(w,q)),lev(n,q));
+function findContact(q){q=normN(q).replace(/^(my|the|our)\s+/,'').trim();if(!q)return null;const cs=contacts(),key=nickKey(q)||q,al=aliases()[key];
+ if(al&&al.tel){const hit=cs.find(c=>digits(c.tel)===digits(al.tel));return hit||al}
+ const grp=NICK[key];if(!cs.length)return null;let best=null,bs=1e9;
+ for(const c of cs){const n=normN(c.name);if(!n&&!c.rel)continue;const words=n.split(' '),rel=normN(c.rel||c.relationship||'');let s;
+  if(n===q||rel===q||(grp&&grp.includes(rel)))s=0;else if(grp&&words.some(w=>grp.includes(w)))s=0.5;else if(words.includes(q)||n.startsWith(q+' '))s=1;else if(grp)s=99;else s=2+Math.min(...words.map(w=>lev(w,q)),lev(n,q));
   if(s<bs){bs=s;best=c}}
  return bs<=2+Math.max(1,Math.floor(q.length/4))?best:null}
+// split "mom running late" into contact + message: longest matching name prefix wins
+function splitWho(t){const w=t.trim().split(/\s+/);for(let n=Math.min(4,w.length);n>=1;n--){const who=w.slice(0,n).join(' '),p=findContact(who);if(p&&p.tel)return{p,who,msg:w.slice(n).join(' ').replace(/^(?:that|saying|says|and say|to say)\s+/i,'')}}
+ const n=/^(my|the)$/i.test(w[0])&&w.length>1?2:1;return{p:null,who:w.slice(0,n).join(' '),msg:w.slice(n).join(' ').replace(/^(?:that|saying|says|and say|to say)\s+/i,'')}}
+const canPick=()=>'contacts' in navigator&&'select' in navigator.contacts;
+async function pickFor(who){const r=await navigator.contacts.select(['name','tel'],{multiple:false});const x=r&&r[0];if(!x||!x.tel||!x.tel[0])return null;
+ const p={name:(x.name||[])[0]||who,tel:x.tel[0]};mergeContacts([p]);const k=nickKey(normN(who).replace(/^(my|the|our)\s+/,''))||normN(who).replace(/^(my|the|our)\s+/,'');const a=aliases();a[k]={name:p.name,tel:p.tel};localStorage.setItem('otocue_alias',JSON.stringify(a));return p}
+// resolve a contact; if unknown, open the picker (now, or via a tap button if Chrome needs a fresh gesture)
+async function resolveOrPick(you,who,kind,then){const p=findContact(who);if(p&&p.tel)return then(p);
+ if(!canPick()){say(you,`I don't have “${who}” saved yet. Add them in Settings → Contacts and I'll remember.`);return}
+ try{const q=await pickFor(who);if(q){status('');return then(q)}say(you,'No contact picked.');return}catch(_){}
+ say(you,`Pick ${who} once and I'll remember.`);let b=$('#tapOpen');if(!b){b=document.createElement('a');b.id='tapOpen';b.className='btn';$('#timers').before(b)}b.removeAttribute('href');b.hidden=false;b.textContent=`👤 Pick ${who} to ${kind}`;
+ b.onclick=async e=>{e.preventDefault();b.remove();try{const q=await pickFor(who);if(q)then(q)}catch(err){status('Contacts: '+err.message)}}}
+function speakWait(t){show(null,t);return new Promise(r=>{let n=0;const w=setInterval(()=>{if(!('speechSynthesis' in window)||(!speechSynthesis.speaking&&n>2)||n>40){clearInterval(w);r()}n++},250)})}
+async function textTo(you,p,msg){if(!msg){await speakWait('What should I say?');try{status('Listening… say your message');msg=((await listen({ms:SR?0:7000})).text||'').trim()}catch(_){}status('');
+  if(!msg){const t=prompt(`What should I text ${p.name}?`);msg=(t||'').trim()}if(!msg){say(you,'No message, so I didn\'t text.');return}}
+ await confirmRun(you,`Texting ${p.name}: “${msg}”.`,smsUrl(p.tel,msg))}
 function tzTime(tz){return new Date().toLocaleTimeString('en-US',{timeZone:tz,hour:'numeric',minute:'2-digit'})}
 function say(you,t){status('');show(you,t)}
-function sayNoContact(you,name){say(you,`I couldn't find “${name}” in your shared contacts. Tap 💬 Message to pick one or enter a number.`)}
+function sayNoContact(you,name){say(you,`I couldn't find “${name}” in your contacts. Add them in Settings → Contacts.`)}
 const confirmOn=()=>localStorage.getItem('otocue_confirm')!=='0';
 // open a URL right away: new tab with a fresh user gesture, same tab otherwise; big tap fallback if blocked
 let lastQ='';function lastTopic(){return lastQ?lastQ.toLowerCase().replace(/[?.!]/g,'').split(/\s+/).filter(w=>!/^(what|which|where|how|who|does|do|did|is|are|should|can|could|would|my|i|me|a|an|the|need|needs|best|kind|of|type|for|to|eat|use|good|recommend|you)$/.test(w)).join(' '):''}
@@ -258,8 +283,7 @@ function parseCmd(raw){const t=raw.trim().replace(/[.?!]+$/,''),l=t.toLowerCase(
  if(m=l.match(/^(?:please\s+)?(?:buy|order|find|get|search|shop for|look for|look up)\s+(?:me\s+)?(.+?)\s+(?:on|at|from)\s+(amazon|walmart|target|petco|petsmart|chewy|home depot|lowe'?s|best buy|cvs|walgreens|autozone)(?:\.com)?$/))return{k:'store',q:m[1].replace(/^(?:some|a|an|the)\s+/,''),st:m[2].replace(/'/g,'').replace(' ','')};
  if(m=l.match(/^(?:so\s+|ok\s+|okay\s+|and\s+)?(?:where|how)\s+(?:can|could|do|should|would)\s+(?:i|we)\s+(?:buy|purchase|get|order)\s*(.*?)(?:\s+(?:from|online|near me|nearby))?$/))if(!/^(?:to|there|home|back|in|out|on|rid)\b/.test(m[1])){const x=m[1].replace(/^(?:some|a|an|the)\s+/,'').trim();return{k:'buy',q:/^(?:it|that|this|them|those|these|one|some|any|stuff|)$/.test(x)?'':x}}
  if(m=l.match(/^(?:please\s+)?(?:call|phone|dial|ring)\s+(.+)$/))return{k:'call',who:t.slice(t.length-m[1].length)};
- if(m=t.match(/^(?:please\s+)?(?:send\s+(?:a\s+)?(?:text|message|sms)\s+to|text|message|send\s+(?:a\s+)?(?:text|message)\s+)\s*(.+?)(?:\s*,?\s+(?:that|saying|says|and say|to say)\s+|\s*:\s*)(.+)$/i))return{k:'text',who:m[1],msg:m[2]};
- if(m=t.match(/^(?:please\s+)?(?:send\s+(?:a\s+)?(?:text|message)\s+to|text|message)\s+(\S+(?:\s\S+)?)$/i))return{k:'text',who:m[1],msg:''};
+ if(m=t.match(/^(?:please\s+)?(?:send\s+(?:a\s+)?(?:text|message|sms)\s+to|text|message|sms|send\s+(?:a\s+)?(?:text|message)\s+(?=\S))\s*(.+)$/i)){const r=m[1].replace(/^to\s+/i,''),k=r.match(/^(.+?)(?:\s*,?\s+(?:that|saying|says|and say|to say)\s+|\s*:\s*)(.+)$/i);if(k&&findContact(k[1]))return{k:'text',who:k[1],msg:k[2]};const x=splitWho(r);return{k:'text',who:x.who,msg:x.msg,p:x.p}}
  if(m=t.match(/^(?:send\s+(?:an\s+)?)?e-?mail(?:\s+to)?\s+(\S+(?:\s\S+)?)(?:\s*,?\s+(?:that|saying|about)?\s*(.*))?$/i)){
   const ws=(m[1]+' '+(m[2]||'')).trim().split(/\s+/);for(const n of [2,1]){const c=findContact(ws.slice(0,n).join(' '));if(c)return{k:'email',who:ws.slice(0,n).join(' '),c,msg:ws.slice(n).join(' ').replace(/^(that|saying|about)\s+/i,'')}}return{k:'email',who:ws[0],msg:ws.slice(1).join(' ')}}
  {const M=l.match(/^(?:please\s+)?(?:(?:can you\s+|could you\s+)?(?:get|buy|book|find|grab|order)\s+(?:me\s+|us\s+)?(?:some\s+|a\s+couple\s+|two\s+|2\s+)?(?:movie\s+)?tickets?\s+(?:to\s+see|to|for|to watch)\s+|(?:movie\s+)?tickets?\s+(?:to\s+see\s+|for\s+|to\s+)|(?:movie\s+)?showtimes?\s+(?:for\s+)?|when\s+is\s+(.+?)\s+playing|i\s+(?:want|wanna|would like)\s+to\s+(?:see|watch)\s+(?=.+\s+(?:in|at)\s+(?:the\s+)?(?:theaters?|theatres?|cinemas?|the movies)$))(.*)$/);
@@ -289,11 +313,10 @@ let localCmd=async function(text){const c=parseCmd(text);if(!c)return false;cons
  switch(c.k){
   case 'store':openNow(you,`Searching ${STORES[c.st][0]} for ${c.q}.`,STORES[c.st][1]+encodeURIComponent(c.q));break;
   case 'buy':await buyCmd(you,c.q);break;
-  case 'call':{const p=findContact(c.who),dig=c.who.replace(/[^+\d]/g,'');if(!p&&dig.length>=3){await confirmRun(you,`Calling ${c.who}.`,'tel:'+dig);break}
-   if(!p||!p.tel){sayNoContact(you,c.who);break}await confirmRun(you,`Calling ${p.name}.`,'tel:'+p.tel.replace(/[^+\d]/g,''));break}
-  case 'text':{const p=findContact(c.who);if(!p||!p.tel){sayNoContact(you,c.who);break}
-   if(!c.msg){window.OtoCue.openMessage(p,'');say(you,`What should I text ${p.name}? Speak or type it, then tap Send.`);break}
-   await confirmRun(you,`Texting ${p.name}: “${c.msg}”.`,'sms:'+p.tel.replace(/[^+\d]/g,'')+'?&body='+encodeURIComponent(c.msg));break}
+  case 'call':{const dig=digits(c.who);if(!findContact(c.who)&&dig.length>=3){await confirmRun(you,`Calling ${c.who}.`,'tel:'+dig);break}
+   await resolveOrPick(you,c.who,'call',p=>confirmRun(you,`Calling ${p.name}.`,'tel:'+digits(p.tel)));break}
+  case 'text':{const dig=digits(c.who);if(!c.p&&!findContact(c.who)&&dig.length>=3){await textTo(you,{name:c.who,tel:dig},c.msg);break}
+   if(c.p){await textTo(you,c.p,c.msg);break}await resolveOrPick(you,c.who,'text',p=>textTo(you,p,c.msg));break}
   case 'email':{const p=c.c||findContact(c.who);if(!p||!p.email){p?say(you,`${p.name} has no email in your shared contacts.`):sayNoContact(you,c.who);break}
    await confirmRun(you,`Emailing ${p.name}${c.msg?': “'+c.msg+'”':''}.`,'mailto:'+p.email+'?body='+encodeURIComponent(c.msg||''));break}
   case 'url':openNow(you,c.msg,c.u);break;
@@ -394,13 +417,13 @@ const prev=localCmd;localCmd=async text=>{
  return prev(text)};
 Object.assign(O,{parseReminder,parseCal});
 // contacts manager (manual add / edit / delete) in Settings
-const getC=()=>{try{return JSON.parse(localStorage.getItem('otocue_contacts')||'[]')}catch(_){return[]}},setC=c=>{localStorage.setItem('otocue_contacts',JSON.stringify(c));cl()};let edit=-1;
-function cl(){const c=getC(),L=$('#cList');L.innerHTML=c.length?'':'<p class="hint">No contacts yet. Add one below (iPhone) or use Share Contacts (Android).</p>';
+const getC=()=>{try{return JSON.parse(localStorage.getItem('otocue_contacts')||'[]')}catch(_){return[]}},setC=c=>{saveContacts(c);cl()};let edit=-1;
+function cl(){const c=getC(),L=$('#cList');let h=$('#cCount');if(!h){h=document.createElement('p');h.id='cCount';h.className='hint';L.before(h)}h.textContent=`${c.length} contact${c.length===1?'':'s'} saved (${c.filter(x=>x.tel).length} with phone numbers).`;L.innerHTML=c.length?'':'<p class="hint">No contacts yet. Add one below (iPhone) or use Share Contacts (Android).</p>';
  c.forEach((x,i)=>{const b=document.createElement('button');b.type='button';b.innerHTML='<b></b><span></span><span class="cx" aria-label="Delete">✕</span>';b.querySelector('b').textContent=x.name;b.querySelector('span').textContent=x.tel||x.email||'';
   b.onclick=e=>{if(e.target.classList.contains('cx')){c.splice(i,1);setC(c);return}edit=i;$('#cName').value=x.name;$('#cTel').value=x.tel||'';$('#cEmail').value=x.email||'';$('#cAdd').textContent='💾 Save contact'};L.appendChild(b)})}
 $('#cAdd').onclick=()=>{const n=$('#cName').value.trim(),t=$('#cTel').value.trim(),e=$('#cEmail').value.trim();if(!n||!(t||e)){status('Enter a name and a number.');return}
  const c=getC(),x={name:n,tel:t,email:e};if(edit>=0)c[edit]=x;else c.push(x);edit=-1;setC(c);['#cName','#cTel','#cEmail'].forEach(s=>$(s).value='');$('#cAdd').textContent='➕ Add contact';status('Contact saved ✓')};
-$('#setBtn').addEventListener('click',cl);cl();
+$('#setBtn').addEventListener('click',cl);cl();window.OtoCue.cl=cl;
 // conversation translation
 const LN=['English','Spanish','French','German','Italian','Portuguese','Japanese','Korean','Chinese (Mandarin)','Hindi','Arabic','Russian','Vietnamese','Tagalog'];
 const LC={English:'en-US',Spanish:'es-ES',French:'fr-FR',German:'de-DE',Italian:'it-IT',Portuguese:'pt-BR',Japanese:'ja-JP',Korean:'ko-KR','Chinese (Mandarin)':'zh-CN',Hindi:'hi-IN',Arabic:'ar-SA',Russian:'ru-RU',Vietnamese:'vi-VN',Tagalog:'fil-PH'};
