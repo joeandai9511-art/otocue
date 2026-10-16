@@ -1,6 +1,14 @@
 'use strict';
 const $=s=>document.querySelector(s);
 const DEF_MODEL='gemini-3.8-flash';
+const PLANG={English:'en-US',Spanish:'es-US',Portuguese:'pt-BR',French:'fr-FR',Chinese:'zh-CN',Vietnamese:'vi-VN',Tagalog:'fil-PH',Korean:'ko-KR',Arabic:'ar-SA',Hindi:'hi-IN'};
+function prof(){try{return JSON.parse(localStorage.getItem('otocue_profile')||'null')}catch(_){return null}}
+function saveProf(p){localStorage.setItem('otocue_profile',JSON.stringify(p))}
+// existing users (key or contacts already saved) get a profile automatically and skip setup
+(function(){if(prof())return;if(localStorage.getItem('otocue_key')||localStorage.getItem('otocue_contacts')||localStorage.getItem('otocue_contacts_bak'))saveProf({first:'J',nick:'',lang:'English',city:'',migrated:true})})();
+const uname=()=>{const p=prof();return p?(p.nick||p.first||''):''};
+const ulang=()=>{const p=prof();return p&&p.lang&&p.lang!=='English'?PLANG[p.lang]:''};
+function profileCtx(){const p=prof();if(!p)return'';return ` The user's name is ${p.first}${p.nick?` (call them ${p.nick})`:''}.`+(p.city?` Their home city is ${p.city}; use it for weather, directions and "near me" questions when no place is given.`:'')+(p.lang&&p.lang!=='English'?` Reply in ${p.lang} unless asked otherwise.`:'')}
 const S={get key(){return localStorage.getItem('otocue_key')||''},get model(){return localStorage.getItem('otocue_model')||DEF_MODEL},
  get voice(){return localStorage.getItem('otocue_voice')||''},get rate(){return parseFloat(localStorage.getItem('otocue_rate')||'1')}};
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
@@ -23,7 +31,7 @@ function buildRequest(parts,system,model,hist,search){
  const key=S.key; if(!key) throw new Error('Add your free Gemini API key in Settings first.');
  const m=model||S.model,tc=noThink?null:thinkCfg(m),gc={maxOutputTokens:tc&&tc.thinkingLevel==='low'?700:300};if(tc)gc.thinkingConfig=tc;
  if(search===undefined)search=!noSearch&&needsSearch(parts);
- const body={systemInstruction:{parts:[{text:system+timeCtx(search)+contactsCtx()}]},contents:(hist||[]).concat([{role:'user',parts}]),generationConfig:gc};
+ const body={systemInstruction:{parts:[{text:system+profileCtx()+timeCtx(search)+contactsCtx()}]},contents:(hist||[]).concat([{role:'user',parts}]),generationConfig:gc};
  if(search)body.tools=[{google_search:{}}];
  return {search,url:`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent`,
   init:{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify(body)}};
@@ -54,7 +62,7 @@ function speak(text,lang){
  if(!('speechSynthesis' in window)) return; speechSynthesis.cancel();
  const u=new SpeechSynthesisUtterance(text.replace(/[*#_`]/g,'')); u.rate=S.rate;
  const vs=speechSynthesis.getVoices();
- let v=lang?vs.find(x=>x.lang.replace('_','-').startsWith(lang.slice(0,2))):vs.find(x=>x.name===S.voice);
+ lang=lang||ulang();let v=lang?vs.find(x=>x.lang.replace('_','-').startsWith(lang.slice(0,2))):vs.find(x=>x.name===S.voice);
  if(v){u.voice=v;u.lang=v.lang} else if(lang) u.lang=lang;
  u.onend=()=>{if(wakeOn) startWake()}; pauseWake(); speechSynthesis.speak(u);
 }
@@ -70,7 +78,7 @@ function record(ms){return new Promise(async(res,rej)=>{if(!(navigator.mediaDevi
   mr.start(1000);const stop=()=>{clearTimeout(t);if(mr.state!=='inactive')mr.stop()},t=setTimeout(stop,ms||8000);stopFn=stop;
  }catch(e){if(e&&e.name==='NotAllowedError'){micHelp();e=new Error('Microphone permission denied.');e.code='not-allowed'}rej(e)}})}
 function listenSR({ms=0,continuous=false,lang}={}){return new Promise((res,rej)=>{
- const r=new SR();curRec=r;r.lang=lang||navigator.language||'en-US';r.interimResults=true;r.continuous=continuous;let fin='',timer,lastInt='',stopped=false,done=false;const end=Date.now()+(ms||60000);
+ const r=new SR();curRec=r;r.lang=lang||ulang()||navigator.language||'en-US';r.interimResults=true;r.continuous=continuous;let fin='',timer,lastInt='',stopped=false,done=false;const end=Date.now()+(ms||60000);
  const finish=()=>{if(done)return;done=true;clearTimeout(timer);if(curRec===r)curRec=null;res({text:(fin.trim()||lastInt.trim()),stopped})};
  r.onresult=e=>{let it='';for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript;if(e.results[i].isFinal)fin+=t+' ';else it+=t}lastInt=it;$('#you').textContent=(fin+it).trim()||'…'};
  r.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed'){done=true;clearTimeout(timer);curRec=null;micHelp();const x=new Error('Microphone permission denied.');x.code='not-allowed';return rej(x)}
@@ -114,7 +122,7 @@ async function doPhoto(){ const f=$('#pfile').files[0]; if(!f){status('Pick or t
 function shrink(file){return new Promise((res,rej)=>{const i=new Image();i.onload=()=>{const m=1280,s=Math.min(1,m/Math.max(i.width,i.height)),c=document.createElement('canvas');c.width=i.width*s;c.height=i.height*s;c.getContext('2d').drawImage(i,0,0,c.width,c.height);URL.revokeObjectURL(i.src);res(c.toDataURL('image/jpeg',.85).split(',')[1])};i.onerror=()=>rej(new Error('Could not read image'));i.src=URL.createObjectURL(file)})}
 
 // ---- wake word
-function startWake(){ if(!wakeOn||busy||!SR||wakeRec) return; const r=new SR(); wakeRec=r; r.continuous=true; r.interimResults=true; r.lang=navigator.language||'en-US';
+function startWake(){ if(!wakeOn||busy||!SR||wakeRec) return; const r=new SR(); wakeRec=r; r.continuous=true; r.interimResults=true; r.lang=ulang()||navigator.language||'en-US';
  r.onresult=e=>{wakeFails=0;for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript.toLowerCase();
   const m=t.match(/\b(hey|hi|ok|okay)[ ,]*(cue|queue|q|kyu|cute|cu)\b(.*)/);
   if(m&&e.results[i].isFinal){pauseWake();const rest=m[3].trim();rest.split(' ').length>2?doAsk(rest):doAsk();return}}};
@@ -138,7 +146,7 @@ if('speechSynthesis' in window){fillVoices();speechSynthesis.onvoiceschanged=fil
 $('#setBtn').onclick=()=>{$('#cfmSet').checked=confirmOn();$('#key').value=S.key;$('#model').value=S.model;$('#rate').value=S.rate;$('#voice').value=S.voice;$('#dlg').showModal()};
 $('#close').onclick=()=>$('#dlg').close();
 $('#save').onclick=()=>{localStorage.setItem('otocue_key',$('#key').value.trim());localStorage.setItem('otocue_model',$('#model').value.trim()||DEF_MODEL);localStorage.setItem('otocue_voice',$('#voice').value);localStorage.setItem('otocue_rate',$('#rate').value);localStorage.setItem('otocue_confirm',$('#cfmSet').checked?'1':'0');$('#dlg').close();status('Settings saved ✓');if(S.key)$('#out').textContent='Ready. Tap Ask.'};
-if(!S.key) setTimeout(()=>$('#setBtn').click(),400);
+
 if(localStorage.getItem('otocue_wake')){$('#wake').checked=true;wakeOn=true;}
 document.addEventListener('visibilitychange',()=>{document.hidden?pauseWake():startWake()});
 function showUpdate(){if($('#updToast'))return;const b=document.createElement('button');b.id='updToast';b.textContent='✨ New version — tap to update';b.onclick=()=>location.reload();document.body.appendChild(b)}
@@ -148,7 +156,7 @@ window.OtoCue={buildRequest,gemini,doAsk,listen,showUpdate,ACACHE};
 
 $('#contactsBtn').onclick=async()=>{
  if(!('contacts' in navigator&&'select' in navigator.contacts)){status('Contacts sharing works in Chrome on Android. iPhone web apps can\'t access contacts.');return}
- try{const r=await navigator.contacts.select(['name','tel','email'],{multiple:true});
+ status('Tap Select all (or pick everyone you text/call), then Done. You only do this once.');try{const r=await navigator.contacts.select(['name','tel'],{multiple:true});
   const c=r.map(x=>({name:(x.name||[])[0]||'',tel:(x.tel||[])[0]||'',email:(x.email||[])[0]||''}));
   const n=mergeContacts(c);status(`Shared ${c.length} contact(s) with OtoCue (${n} saved).`)}catch(e){status('Contacts: '+e.message)}};
 (function(){const o=$('#out');if(!o)return;new MutationObserver(()=>{const t=o.textContent,m=t.match(/\[(CALL|TEXT):([^\]]+)\]/);if(m){o.textContent=t.replace(m[0],'');location.href=(m[1]==='CALL'?'tel:':'sms:')+m[2].replace(/[^+\d]/g,'')}}).observe(o,{childList:true,characterData:true,subtree:true})})();
@@ -157,7 +165,7 @@ $('#contactsBtn').onclick=async()=>{
 (function(){
 const buzz=(p=12)=>{try{if(navigator.userActivation&&!navigator.userActivation.hasBeenActive)return;navigator.vibrate&&navigator.vibrate(p)}catch(_){}};
 document.addEventListener('pointerdown',e=>{if(e.target.closest('button'))buzz()},{passive:true});
-const h=new Date().getHours();$('#greet').textContent=(h<5?'Up late':h<12?'Good morning':h<18?'Good afternoon':'Good evening')+', J';
+window.greetUser=function(){const h=new Date().getHours();$('#greet').textContent=(h<5?'Up late':h<12?'Good morning':h<18?'Good afternoon':'Good evening')+(uname()?', '+uname():'')};greetUser();
 const stage=$('#stage');let mic=null;
 function setState(s){if(stage.dataset.state===s)return;stage.dataset.state=s;if(s==='listening')startMeter();else stopMeter()}
 async function startMeter(){return;try{if(!navigator.permissions||!navigator.mediaDevices||!(window.AudioContext||window.webkitAudioContext))return;
@@ -491,7 +499,7 @@ function parseEmail(raw){const t=raw.trim().replace(/[.!]+$/,'');let m,polish=fa
 async function doEmail(you,e){const p=e.c;if(!p){say(you,`I couldn't find “${e.who}” in your contacts. Add them in Settings › Contacts.`);return}
  if(!p.email){say(you,`${p.name} has no email saved. Add one in Settings › Contacts.`);return}
  let {subject,body}=e;
- if(e.polish){status('Writing…');const a=await gemini([{text:`Write a short, warm email to ${p.name}${subject?' about '+subject:''}. Content: ${body||subject||'a friendly hello'}. Sign it from J. Reply exactly as:\nSubject: <subject>\n<body>`}],'You write short, natural emails. Plain text only.');
+ if(e.polish){status('Writing…');const a=await gemini([{text:`Write a short, warm email to ${p.name}${subject?' about '+subject:''}. Content: ${body||subject||'a friendly hello'}. Sign it from ${uname()||'me'}. Reply exactly as:\nSubject: <subject>\n<body>`}],'You write short, natural emails. Plain text only.');
   const m=a.match(/^\s*Subject:\s*(.+)\n+([\s\S]+)$/i);if(m){subject=m[1].trim();body=m[2].trim()}else body=a}
  await confirmRun(you,`Emailing ${p.name}${subject?' — subject “'+subject+'”':''}${body?': “'+body+'”':''}.`,'mailto:'+encodeURIComponent(p.email).replace('%40','@')+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body))}
 const NETS={instagram:'instagram',ig:'instagram',insta:'instagram',facebook:'facebook',fb:'facebook',x:'x',twitter:'x',tiktok:'tiktok','tik tok':'tiktok',whatsapp:'whatsapp',snapchat:'snapchat',snap:'snapchat',linkedin:'linkedin'};
@@ -558,4 +566,33 @@ function manage(raw){const l=raw.toLowerCase().trim().replace(/[.?!]+$/,'').repl
  if(/^(?:stop|turn off|dismiss)(?: it)?$/.test(l)&&O.ringing()){O.stopAlarm();say(raw,'Alarm stopped.');return true}
  return false}
 const prev=localCmd;localCmd=async t=>manage(t)||prev(t);O.manage=manage;
+})();
+
+// ---- first-run setup / edit profile
+(function(){const D=$('#setupDlg');if(!D)return;let step=0,mode='full';const secs=[...D.querySelectorAll('section')],dots=[...D.querySelectorAll('.sdots i')];
+ const show=n=>{step=n;secs.forEach((x,i)=>x.classList.toggle('on',i===n));dots.forEach((d,i)=>d.classList.toggle('on',i<=n));const f=secs[n].querySelector('input');if(f&&n===1)setTimeout(()=>f.focus(),50)};
+ const fill=()=>{const p=prof()||{};$('#suFirst').value=p.first||'';$('#suNick').value=p.nick||'';$('#suLang').value=p.lang||'English';$('#suCity').value=p.city||'';$('#suKey').value=localStorage.getItem('otocue_key')||'';$('#suErr').textContent='';$('#suKeyMsg').textContent=''};
+ const open=(m,n)=>{mode=m;fill();$('#suInfoNext').textContent=m==='edit'?'💾 Save':'Next';if(!D.open)D.showModal();show(n)};
+ const saveInfo=()=>{const first=$('#suFirst').value.trim();if(!first){$('#suErr').textContent='Please enter your first name.';$('#suFirst').focus();return false}
+  const lang=$('#suLang').value,old=prof()||{};saveProf({...old,first,nick:$('#suNick').value.trim(),lang,city:$('#suCity').value.trim(),migrated:false});
+  if(lang!=='English'&&!localStorage.getItem('otocue_lang'))localStorage.setItem('otocue_lang','English');greetUser();return true};
+ D.querySelectorAll('.snext').forEach(b=>b.onclick=()=>{if(step===1){if(!saveInfo())return;if(mode==='edit'){D.close();status('Profile saved.');return}}
+  if(step===2){const k=$('#suKey').value.trim();if(k)localStorage.setItem('otocue_key',k)}show(Math.min(step+1,4));if(step===4)$('#suDoneH').textContent=`Hi ${uname()}! Tap Ask to start.`});
+ D.querySelectorAll('.sback').forEach(b=>b.onclick=()=>show(Math.max(0,step-1)));
+ $('#suSkipKey').onclick=()=>{$('#suKeyMsg').textContent='No problem: commands like text, call, play and directions work without a key.';show(3)};
+ $('#suPaste').onclick=async()=>{try{const t=(await navigator.clipboard.readText()).trim();if(t){$('#suKey').value=t;$('#suKeyMsg').textContent='Pasted. Tap Test key.'}}catch(_){$('#suKeyMsg').textContent='Long-press the box and choose Paste.'}};
+ $('#suTest').onclick=async()=>{const k=$('#suKey').value.trim(),m=$('#suKeyMsg');if(!k){m.textContent='Paste your key first.';return}m.textContent='Testing…';
+  try{const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(S.model)}:generateContent`,{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':k},body:JSON.stringify({contents:[{role:'user',parts:[{text:'Say OK'}]}],generationConfig:{maxOutputTokens:5}})});
+   if(r.ok||r.status===429){localStorage.setItem('otocue_key',k);m.textContent=r.ok?'✅ Your key works! You\'re ready.':'✅ Key works, but today\'s free limit is used up. It resets daily.'}
+   else if(r.status===400||r.status===401||r.status===403)m.textContent='❌ That key didn\'t work. Copy it again from AI Studio and paste the whole thing.';else m.textContent='⚠ Google returned an error ('+r.status+'). Try again in a minute.'}
+  catch(_){m.textContent='⚠ Couldn\'t reach Google. Check your internet and try again.'}};
+ $('#suContacts').onclick=async()=>{const m=$('#suCMsg');if(!('contacts' in navigator&&'select' in navigator.contacts)){m.textContent='Contact sharing works in Chrome on Android. You can add contacts in Settings anytime.';return}
+  m.textContent='Tap Select all (or pick everyone you text/call), then Done. You only do this once.';try{const r=await navigator.contacts.select(['name','tel'],{multiple:true});const n=mergeContacts(r.map(x=>({name:(x.name||[])[0]||'',tel:(x.tel||[])[0]||'',email:(x.email||[])[0]||''})));m.textContent=`✅ ${n} contact${n===1?'':'s'} saved.`}catch(e){m.textContent='Skipped: '+e.message}};
+ $('#suMic').onclick=()=>{const m=$('#suMMsg');if(!SR){m.textContent='Voice typing isn\'t supported in this browser; you can still type.';return}m.textContent='🎙 Listening… say “hello OtoCue”';
+  listen({ms:5000}).then(h=>{m.textContent=h&&h.text?`✅ Heard: “${h.text}”`:'Didn\'t hear anything. Check mic permission, or skip.'}).catch(e=>{m.textContent='⚠ '+e.message})};
+ $('#suDone').onclick=()=>{localStorage.setItem('otocue_setup_done','1');D.close();greetUser();speak(`Hi ${uname()}! Tap Ask to start.`)};
+ D.addEventListener('cancel',e=>{if(!prof())e.preventDefault()});
+ $('#profEdit').onclick=()=>{$('#dlg').close();open('edit',1)};$('#profRerun').onclick=()=>{$('#dlg').close();open('full',0)};
+ window.OtoCue.setup=open;
+ if(!prof()){document.querySelectorAll('dialog[open]').forEach(d=>d.close());open('full',0)}
 })();

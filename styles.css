@@ -81,3 +81,7 @@ body.wakeon[data-x] #wakeBadge{display:inline-block}
 .mAsk{width:100%;font-size:18px;font-weight:700;padding:16px;margin:4px 0 10px;background:linear-gradient(90deg,#f5c84c,#d99a1e);color:#1a1205;box-shadow:0 0 18px #f5c84c88}
 .mlang{display:flex;align-items:center;gap:8px;margin:8px 0 2px}.mlang label{margin:0;white-space:nowrap}.mlang select{flex:1;padding:8px;border-radius:12px}
 .mAsk.rec{animation:mpulse 1s infinite alternate}@keyframes mpulse{to{box-shadow:0 0 34px #f5c84ccc;filter:brightness(1.15)}}
+.setup{max-width:440px}.setup section{display:none}.setup section.on{display:block;animation:sfade .18s ease-out}@keyframes sfade{from{opacity:0;transform:translateY(6px)}}
+.sdots{display:flex;gap:6px;justify-content:center;margin-bottom:10px}.sdots i{width:8px;height:8px;border-radius:50%;background:#5a4a20}.sdots i.on{background:#f5c84c;box-shadow:0 0 8px #f5c84c}
+.sorb{font-size:44px;width:84px;height:84px;margin:6px auto 8px;border-radius:50%;display:grid;place-items:center;background:radial-gradient(circle at 35% 30%,#ffe9a3,#d99a1e 70%);box-shadow:0 0 28px #f5c84c88}
+.setup h2{text-align:center}.setup .snext,.setup #suDone{background:linear-gradient(90deg,#f5c84c,#d99a1e);color:#1a1205;font-weight:700}.sguide{line-height:1.7}.serr{color:#ff8a7a}.small{font-size:12px;opacity:.8}.setup .row{gap:8px;margin-top:10px}
