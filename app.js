@@ -110,7 +110,7 @@ async function run(label,fn){ if(busy) return; busy=true; $('#ask').classList.ad
 async function doAsk(pre){ await run('ask',async()=>{
  let heard; if(pre) heard={text:pre}; else {status('Listening… ask your question');hush();heard=await listen({ms:SR?0:7000,fallback:true});}
  if(!heard.audio&&!heard.text){status('Didn\'t catch that.');return}
- {const bm=document.getElementById('buyMaps');if(bm)bm.remove();const pc=document.getElementById('phoneCard');if(pc)pc.remove()}
+ {const bm=document.getElementById('buyMaps');if(bm)bm.remove();const pc=document.getElementById('phoneCard');if(pc)pc.remove();const wx=document.getElementById('wxDetail');if(wx)wx.remove()}
  if(heard.text&&await localCmd(heard.text)) return;
  if(heard.text)lastQ=heard.text; status('Thinking…'); const q=heard.audio?partsFrom(heard,'Answer the question asked in this audio.'):[{text:heard.text}]; let a;try{a=await gemini(q,SYS,undefined,HIST.slice(-12))}catch(e){if(heard.text&&/^(?:cancel|stop|turn|open|text|call|send|play|set|remind|translate|take|go|navigate|directions|find|order|get|show|start|close|switch|change|no|yes|in english|english)\b/i.test(normCmd(heard.text))){status('');say(heard.text,`I didn't recognize that command, and online answers are paused right now. Try saying it another way, like “open Spotify” or “cancel translate”.`);return}throw e}
  HIST.push({role:'user',parts:[{text:heard.text||'(voice question)'}]},{role:'model',parts:[{text:a}]}); while(HIST.length>12) HIST.shift();
@@ -800,6 +800,45 @@ const prev=localCmd;localCmd=async t=>manage(t)||prev(t);O.manage=manage;
   if(tc.on&&!tc.lang){say(t,`Translate is ${msgLang()?'on, '+msgLang():'off'}. Say “translate to Spanish” to pick a language.`);return true}
   if(TLANG[tc.lang]){const L=tc.lang[0].toUpperCase()+tc.lang.slice(1);localStorage.setItem('otocue_msglang',L);if(ml)ml.value=L;say(t,`Messages will be translated to ${L}.`);return true}}
  return pv(t)}}
+// ---- local weather (Open-Meteo, no key, never Gemini)
+{const WMO={0:'clear',1:'mostly clear',2:'partly cloudy',3:'cloudy',45:'foggy',48:'foggy',51:'light drizzle',53:'drizzle',55:'heavy drizzle',56:'freezing drizzle',57:'freezing drizzle',61:'light rain',63:'rainy',65:'heavy rain',66:'freezing rain',67:'freezing rain',71:'light snow',73:'snowy',75:'heavy snow',77:'snow grains',80:'light showers',81:'showers',82:'heavy showers',85:'snow showers',86:'heavy snow showers',95:'thunderstorms',96:'thunderstorms with hail',99:'thunderstorms with hail'};
+ const wd=(c,day)=>{const w=WMO[c]||'mixed';return c<=1&&day?(c?'mostly sunny':'sunny'):w};
+ function parseW(t){const l=normCmd(t).replace(/'/g,'');
+  if(!/\b(weather|forecast|temperature|temp|how (?:hot|cold|warm)|is it (?:hot|cold|warm)|(?:going to|gonna|will it|is it) (?:rain|snow|be (?:hot|cold|warm|sunny|nice))|rain(?:ing)? (?:today|tomorrow|tonight)|need (?:a |an )?(?:jacket|umbrella|coat|sweater)|umbrella)\b/.test(l))return null;
+  if(/\b(news|stock|app|channel|radar map|song)\b/.test(l))return null;
+  let when=/\btomorrow\b/.test(l)?'tomorrow':/\b(this |the )?weekend\b/.test(l)?'weekend':/\b(this week|week|next few days|forecast for the week)\b/.test(l)?'week':/\btonight\b/.test(l)?'tonight':'now';
+  const m=l.match(/\b(?:in|for|at|near)\s+([a-z][a-z .-]+?)(?:\s+(?:today|tomorrow|tonight|this weekend|this week|right now|now|on the weekend))?$/);let place=m?m[1].trim():'';
+  if(/^(?:the )?(?:weekend|week|morning|afternoon|evening|today|tomorrow|tonight|here|my area|area|town)$/.test(place))place='';
+  const q=/jacket|coat|sweater/.test(l)?'jacket':/umbrella|rain|snow/.test(l)?'rain':/hot|cold|warm|temp/.test(l)?'temp':'gen';return{when,place,q,snow:/\bsnow/.test(l)}}
+ async function geo(name){const j=await(await fetch('https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&format=json&name='+encodeURIComponent(name.replace(/,.*$/,'')))).json();const r=j.results&&j.results[0];if(!r)throw new Error('nf');return{lat:r.latitude,lon:r.longitude,name:r.name}}
+ async function here(){try{const c=JSON.parse(localStorage.getItem('otocue_wloc')||'null');if(c&&Date.now()-c.t<6*36e5)return c}catch(_){}
+  const p=prof();let L=null;
+  if(navigator.geolocation)L=await new Promise(res=>navigator.geolocation.getCurrentPosition(x=>res({lat:x.coords.latitude,lon:x.coords.longitude,name:''}),()=>res(null),{timeout:6000,maximumAge:36e5}));
+  if(L&&!L.name){try{const j=await(await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&zoom=10&lat=${L.lat}&lon=${L.lon}`)).json();const a=j.address||{};L.name=a.city||a.town||a.village||a.suburb||''}catch(_){}if(!L.name&&p&&p.city)L.name=p.city}
+  if(!L&&p&&p.city)L=await geo(p.city).catch(()=>null);
+  if(L){L.t=Date.now();localStorage.setItem('otocue_wloc',JSON.stringify(L))}return L}
+ async function weather(you,w){status('Checking the weather…');let L;
+  try{L=w.place?await geo(w.place):await here()}catch(_){say(you,`I couldn't find ${w.place}.`);return}
+  if(!L){say(you,'Tell me your city in Settings, or allow location, and I can check the weather.');return}
+  let j;try{j=await(await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${L.lat}&longitude=${L.lon}&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,relative_humidity_2m,is_day,precipitation&hourly=precipitation_probability,temperature_2m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max,sunrise,sunset&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto&forecast_days=7`)).json()}catch(_){status('');say(you,'Weather service is unreachable right now.');return}
+  status('');const C=j.current,D=j.daily,R=Math.round,inn=L.name?` in ${L.name}`:'';const dn=i=>new Date(D.time[i]+'T12:00').toLocaleDateString('en-US',{weekday:'long'});
+  const day=i=>`${dn(i)}: ${wd(D.weather_code[i],1)}, high ${R(D.temperature_2m_max[i])}°, low ${R(D.temperature_2m_min[i])}°, ${D.precipitation_probability_max[i]??0}% rain, wind up to ${R(D.wind_speed_10m_max[i])} mph`;
+  let sp,det;
+  if(w.when==='tomorrow'){const i=1;sp=`Tomorrow${inn}: ${wd(D.weather_code[i],1)}, high of ${R(D.temperature_2m_max[i])}, low of ${R(D.temperature_2m_min[i])}, ${D.precipitation_probability_max[i]??0} percent chance of rain.`;det=day(i)}
+  else if(w.when==='weekend'||w.when==='week'){const idx=D.time.map((t,i)=>i).filter(i=>w.when==='week'||[0,6].includes(new Date(D.time[i]+'T12:00').getDay())).slice(0,w.when==='week'?7:2);
+   sp=(w.when==='weekend'?`This weekend${inn}: `:`This week${inn}: `)+idx.slice(0,w.when==='week'?3:2).map(i=>`${dn(i)} ${wd(D.weather_code[i],1)}, high ${R(D.temperature_2m_max[i])}`).join('; ')+'.';det=idx.map(day).join('\n')}
+  else{const t=R(C.temperature_2m),hi=R(D.temperature_2m_max[0]),lo=R(D.temperature_2m_min[0]),rp=D.precipitation_probability_max[0]??0;
+   const nowH=new Date(C.time).getTime(),rest=j.hourly.time.map((x,i)=>[new Date(x).getTime(),j.hourly.precipitation_probability[i]]).filter(([x])=>x>=nowH&&x<nowH+12*36e5),rmax=Math.max(0,...rest.map(x=>x[1]||0));
+   sp=`It's ${t} and ${wd(C.weather_code,C.is_day)}${inn}. High of ${hi}, low of ${lo}.`;
+   if(w.q==='rain'){const k=w.snow?'snow':'rain';sp+=rmax>=50?` Yes, ${k} is likely, ${rmax} percent chance in the next 12 hours.`:rmax>=20?` Maybe, ${rmax} percent chance of ${k} later.`:` No ${k} expected.`}
+   else if(w.q==='jacket'){const f=R(C.apparent_temperature);sp+=f<55||lo<50?` Yes, bring a jacket, it feels like ${f}${lo<50?' and drops to '+lo:''}.`:f<65?' A light layer would be smart.':' No jacket needed.'}
+   else if(w.when==='tonight')sp=`Tonight${inn}: low of ${lo}, ${rmax}% chance of rain. Right now it's ${t}.`;
+   else if(rp>=40)sp+=` ${rp} percent chance of rain.`;
+   det=`Feels like ${R(C.apparent_temperature)}°, humidity ${C.relative_humidity_2m}%, wind ${R(C.wind_speed_10m)} mph.\n`+[1,2,3].map(day).join('\n')}
+  say(you,sp);const o=$('#out');if(o){const d=document.createElement('div');d.className='hint';d.id='wxDetail';d.style.whiteSpace='pre-line';d.style.textAlign='left';d.textContent=det+'\nSource: Open-Meteo';const old=document.getElementById('wxDetail');if(old)old.remove();o.after(d)}
+  window.OtoCue.lastWeather={sp,det,L}}
+ const pv=localCmd;localCmd=async t=>{const w=parseW(t);if(w){await weather(t,w);return true}return pv(t)};window.OtoCue.parseW=parseW}
+
 })();
 
 // ---- first-run setup / edit profile
