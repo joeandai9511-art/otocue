@@ -12,20 +12,29 @@ const status=t=>$('#status').textContent=t||'';
 const FALLBACKS=['gemini-flash-latest','gemini-3.6-flash','gemini-2.5-flash'];
 let noSearch=sessionStorage.getItem('otocue_nosearch')==='1';const HIST=[];
 function contactsCtx(){try{const c=JSON.parse(localStorage.getItem('otocue_contacts')||'[]');if(!c.length)return '';return ' The user shared these contacts: '+c.map(x=>`${x.name}: ${x.tel||''} ${x.email||''}`).join('; ')+'. If the user asks to call or text one of them, include exactly [CALL:number] or [TEXT:number] in your reply.'}catch(_){return ''}}
-function timeCtx(){const d=new Date(),tz=Intl.DateTimeFormat().resolvedOptions().timeZone;return ` The current date and time for the user is ${d.toLocaleString('en-US',{timeZone:tz,dateStyle:'full',timeStyle:'long'})} (time zone ${tz}); exact UTC time ${d.toISOString()}. Use this for any question about the current time or date anywhere, converting time zones yourself. Use Google Search for anything current (weather, news, scores, prices, hours).`}
-function buildRequest(parts,system,model,hist){
+function timeCtx(s){const d=new Date(),tz=Intl.DateTimeFormat().resolvedOptions().timeZone;return ` The current date and time for the user is ${d.toLocaleString('en-US',{timeZone:tz,dateStyle:'full',timeStyle:'long'})} (time zone ${tz}); exact UTC time ${d.toISOString()}. Use this for any question about the current time or date anywhere, converting time zones yourself.`+(s?' Use Google Search for anything current (weather, news, scores, prices, hours).':'')}
+const LIVE_RE=/\b(weather|forecast|temperature|rain|snow|news|headlines?|scores?|game|match|today|tonight|tomorrow|yesterday|latest|recent|currently|current|now|price|prices|cost|stocks?|market|crypto|bitcoin|open now|hours|near me|nearby|who won|winner|results?|election|this week|this weekend|next week|traffic|flights?|release date|update|live)\b/i;
+function needsSearch(parts){const t=(parts||[]).map(p=>p.text||'').join(' ');return LIVE_RE.test(t)}
+// Thinking control per model (Gemini docs, Oct 2026): 3.8-flash supports low|medium|high; 3.6/3/lite support minimal; 2.5-flash uses thinkingBudget 0.
+function thinkCfg(m){m=m||'';if(/2\.5-flash/.test(m))return{thinkingBudget:0};if(/(3\.6-flash|3-flash|flash-lite)/.test(m))return{thinkingLevel:'minimal'};if(/gemini-[34]/.test(m)||/latest/.test(m))return{thinkingLevel:'low'};return null}
+let noThink=false;
+function buildRequest(parts,system,model,hist,search){
  const key=S.key; if(!key) throw new Error('Add your free Gemini API key in Settings first.');
- return {url:`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model||S.model)}:generateContent`,
-  init:{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},
-  body:JSON.stringify(Object.assign({systemInstruction:{parts:[{text:system+timeCtx()+contactsCtx()}]},contents:(hist||[]).concat([{role:'user',parts}])},noSearch?{}:{tools:[{google_search:{}}]}))}};
+ const m=model||S.model,tc=noThink?null:thinkCfg(m),gc={maxOutputTokens:tc&&tc.thinkingLevel==='low'?700:300};if(tc)gc.thinkingConfig=tc;
+ if(search===undefined)search=!noSearch&&needsSearch(parts);
+ const body={systemInstruction:{parts:[{text:system+timeCtx(search)+contactsCtx()}]},contents:(hist||[]).concat([{role:'user',parts}]),generationConfig:gc};
+ if(search)body.tools=[{google_search:{}}];
+ return {search,url:`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent`,
+  init:{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify(body)}};
 }
 async function gemini(parts,system=SYS,model,hist){
- const {url,init}=buildRequest(parts,system,model,hist);
+ const {url,init,search}=buildRequest(parts,system,model,hist);
  const r=await fetch(url,init);
- if(!noSearch&&(r.status===429||r.status===400||r.status===403)){noSearch=true;sessionStorage.setItem('otocue_nosearch','1');return await gemini(parts,system,model,hist)}
+ if(search&&(r.status===429||r.status===400||r.status===403)){noSearch=true;sessionStorage.setItem('otocue_nosearch','1');return await gemini(parts,system,model,hist)}
+ if(r.status===400&&!noThink){noThink=true;return await gemini(parts,system,model,hist)}
  if((r.status===503||r.status===429)&&!model){ for(const m of FALLBACKS) if(m!==S.model){ try{return await gemini(parts,system,m,hist)}catch(_){} } } const j=await r.json().catch(()=>({}));
  if(!r.ok) throw new Error(j.error?.message||('Gemini error '+r.status));
- const t=(j.candidates?.[0]?.content?.parts||[]).map(p=>p.text||'').join('').trim();
+ const t=(j.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||'').join('').trim();
  if(!t) throw new Error('No answer returned.'); return t;
 }
 const SYS='You are OtoCue, a concise AI assistant heard through an earpiece. Answer in 1-4 short spoken sentences, plain text, no markdown or lists.';
@@ -148,12 +157,12 @@ function sync(){const t=$('#status').textContent;
  else if('speechSynthesis' in window&&speechSynthesis.speaking)setState('speaking');
  else setState('idle')}
 new MutationObserver(sync).observe($('#status'),{childList:true,characterData:true,subtree:true});
-new MutationObserver(sync).observe($('#ask'),{attributes:true,attributeFilter:['class']});setInterval(sync,400);
+new MutationObserver(sync).observe($('#ask'),{attributes:true,attributeFilter:['class']});setInterval(()=>{if(!document.hidden&&(stage.dataset.state!=='idle'||('speechSynthesis' in window&&speechSynthesis.speaking)))sync()},400);
+document.addEventListener('visibilitychange',()=>document.body.classList.toggle('paused',document.hidden));
 // chat history mirrors #out
 const chat=$('#chat');let typer=null;
 function bubble(cls,text,type){const b=document.createElement('div');b.className='bub '+cls;chat.appendChild(b);
- if(!type){b.textContent=text;return b}clearInterval(typer);b.classList.add('typing');let i=0;const step=Math.max(1,Math.ceil(text.length/60));
- typer=setInterval(()=>{i+=step;b.textContent=text.slice(0,i);if(i>=text.length){clearInterval(typer);b.classList.remove('typing')}b.scrollIntoView({block:'nearest',behavior:'smooth'})},22);return b}
+ b.textContent=text;if(type)b.scrollIntoView({block:'nearest'});return b}
 const out=$('#out');let last='';
 function mirror(){const t=out.textContent;if(!t||t===last||/\[(CALL|TEXT):/.test(t))return;last=t;
  const you=$('#you').textContent;if(you&&you!=='—'&&you!=='…'&&!t.startsWith('⚠'))bubble('me',you);bubble('ai',t,true);buzz([8,40,8])}
